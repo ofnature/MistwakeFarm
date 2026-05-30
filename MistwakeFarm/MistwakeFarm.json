@@ -1,0 +1,15 @@
+{
+  "Author": "ofnature",
+  "Name": "MistwakeFarm",
+  "Description": "Automates Mistwake dungeon farming, GC expert delivery, and Duckbone purchasing.",
+  "InternalName": "MistwakeFarm",
+  "AssemblyVersion": "1.0.0.0",
+  "RepoUrl": "https://github.com/ofnature/MistwakeFarm",
+  "ApplicableVersion": "any",
+  "Tags": ["farm", "automation", "gil"],
+  "DalamudApiLevel": 11,
+  "LoadRequiredState": 0,
+  "LoadSync": false,
+  "CanUnloadAsync": true,
+  "SupportsProfiles": true
+}
