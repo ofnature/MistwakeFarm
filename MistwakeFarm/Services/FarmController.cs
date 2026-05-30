@@ -38,11 +38,11 @@ public sealed class FarmController : IDisposable
 
     public enum FarmState
     {
-        Idle, StartDuty, WaitingForDutyStart, WaitingForDutyComplete,
+        Idle, CheckSealSpend, StartDuty, WaitingForDutyStart, WaitingForDutyComplete,
         TeleportToGC, WaitingForZone, NavigateToOfficer,
         OpenExpertDelivery, ProcessDelivery,
         NavigateToShop, OpenGCShop, BuyDuckbones,
-        CycleComplete, Error,
+        CheckGcLoop, CycleComplete, Error,
     }
 
     public FarmState State         { get; private set; } = FarmState.Idle;
@@ -60,6 +60,10 @@ public sealed class FarmController : IDisposable
     private int   _deliverySkipped;
     private int   _sealsBefore;
     private Task? _currentTask;
+    private DateTime  _teleportStartTime;
+    private DateTime? _teleportReadyAt;
+    private bool      _gcInitialSpend;
+    private bool      _deliveryListEmpty;
 
     public FarmController()  => Service.Framework.Update += OnFrameworkUpdate;
     public void Dispose()    { Service.Framework.Update -= OnFrameworkUpdate; IpcManager.VnavStop(); }
@@ -69,8 +73,9 @@ public sealed class FarmController : IDisposable
         if (IsRunning) return;
         IsRunning = true; TotalCycles = 0; TotalRuns = 0; TotalSeals = 0;
         TotalDuckbones = 0; StartTime = DateTime.Now; _runsThisCycle = 0; LastError = null;
-        GotoState(FarmState.StartDuty);
-        Log("Farm started.");
+        _gcInitialSpend = true; _deliveryListEmpty = false;
+        GotoState(FarmState.CheckSealSpend);
+        Log($"Farm started — current seals: {GetCurrentSeals():N0}");
     }
 
     public void Stop()
@@ -101,6 +106,27 @@ public sealed class FarmController : IDisposable
 
         switch (State)
         {
+            case FarmState.CheckSealSpend:
+            {
+                var seals = GetCurrentSeals();
+                Log($"Seal check — current: {seals:N0}, duckbone cost: {Plugin.Config.DuckboneSealCost + Plugin.Config.SealReserve:N0}");
+
+                if (ShouldEnterGcSpendLoop())
+                {
+                    if (!IpcManager.LifestreamAvailable) { SetError("Lifestream IPC not available"); return; }
+                    if (!IpcManager.VnavAvailable)       { SetError("vnavmesh IPC not available"); return; }
+                    Status($"Seals at {seals:N0} — heading to GC before farming");
+                    GotoState(FarmState.TeleportToGC);
+                }
+                else
+                {
+                    Log($"Seals at {seals:N0} — below spend threshold, starting duties");
+                    _gcInitialSpend = false;
+                    GotoState(FarmState.StartDuty);
+                }
+                break;
+            }
+
             case FarmState.StartDuty:
                 if (!IpcManager.AutoDutyAvailable) { SetError("AutoDuty IPC not available"); return; }
                 TotalCycles++; _runsThisCycle = 0;
@@ -118,25 +144,74 @@ public sealed class FarmController : IDisposable
                 {
                     _runsThisCycle++; TotalRuns++;
                     Status($"Run {_runsThisCycle}/{cfg.RunsPerCycle} complete (total {TotalRuns})");
-                    GotoState(_runsThisCycle >= cfg.RunsPerCycle ? FarmState.TeleportToGC : FarmState.StartDuty);
+                    if (_runsThisCycle >= cfg.RunsPerCycle)
+                    {
+                        _deliveryListEmpty = false;
+                        GotoState(FarmState.TeleportToGC);
+                    }
+                    else
+                    {
+                        GotoState(FarmState.StartDuty);
+                    }
                 }
                 break;
 
             case FarmState.TeleportToGC:
+            {
                 if (!IpcManager.LifestreamAvailable) { SetError("Lifestream IPC not available"); return; }
-                if (Service.ClientState.TerritoryType == GcZoneId[gcIdx]) { GotoState(FarmState.NavigateToOfficer); return; }
+
+                var targetZoneId  = GcZoneId[gcIdx];
+                var currentZoneId = Service.ClientState.TerritoryType;
+
+                if (currentZoneId == targetZoneId)
+                {
+                    Log($"Already in GC city (zone {currentZoneId})");
+                    GotoState(FarmState.NavigateToOfficer);
+                    return;
+                }
+
+                Log($"Teleporting to {GcTpCommand[gcIdx]} — current zone {currentZoneId}, target zone {targetZoneId}");
                 Status($"Teleporting to {GcTpCommand[gcIdx]}...");
                 IpcManager.LifestreamExecute(GcTpCommand[gcIdx]);
+                _teleportStartTime = DateTime.Now;
+                _teleportReadyAt   = null;
                 GotoState(FarmState.WaitingForZone);
                 break;
+            }
 
             case FarmState.WaitingForZone:
-                if (Service.ClientState.TerritoryType == GcZoneId[gcIdx]
-                    && PlayerPos().HasValue
+            {
+                var targetZoneId = GcZoneId[gcIdx];
+
+                if (DateTime.Now - _teleportStartTime > TimeSpan.FromSeconds(60))
+                {
+                    SetError("Teleport to GC timed out");
+                    return;
+                }
+
+                if (Service.ClientState.TerritoryType == targetZoneId
                     && !IpcManager.LifestreamIsBusy()
                     && !IsBetweenAreas())
-                { Status("Arrived at GC city"); GotoState(FarmState.NavigateToOfficer); }
+                {
+                    if (_teleportReadyAt == null)
+                    {
+                        _teleportReadyAt = DateTime.Now;
+                        Status("Arrived at GC city — settling...");
+                        return;
+                    }
+
+                    if (DateTime.Now - _teleportReadyAt.Value >= TimeSpan.FromSeconds(2))
+                    {
+                        _teleportReadyAt = null;
+                        GotoState(FarmState.NavigateToOfficer);
+                    }
+                }
+                else
+                {
+                    _teleportReadyAt = null;
+                }
                 break;
+            }
 
             case FarmState.NavigateToOfficer:
                 if (!IpcManager.VnavAvailable) { SetError("vnavmesh IPC not available"); return; }
@@ -154,6 +229,38 @@ public sealed class FarmController : IDisposable
 
             case FarmState.OpenGCShop:   _currentTask = OpenGCShopAsync(); break;
             case FarmState.BuyDuckbones: _currentTask = BuyDuckbonesTickAsync(); break;
+
+            case FarmState.CheckGcLoop:
+            {
+                var seals = GetCurrentSeals();
+                Log($"GC loop check — seals: {seals:N0}, delivery empty: {_deliveryListEmpty}, can buy duckbone: {CanAffordDuckbone()}");
+
+                if (_deliveryListEmpty && !CanAffordDuckbone())
+                {
+                    if (_gcInitialSpend)
+                    {
+                        _gcInitialSpend = false;
+                        Log("Initial GC spend complete — starting duty cycle");
+                        GotoState(FarmState.StartDuty);
+                    }
+                    else
+                    {
+                        GotoState(FarmState.CycleComplete);
+                    }
+                }
+                else if (CanAffordDuckbone())
+                {
+                    GotoState(FarmState.NavigateToShop);
+                }
+                else
+                {
+                    _deliveryListEmpty = false;
+                    _deliveryRow = 0;
+                    _deliverySkipped = 0;
+                    GotoState(FarmState.NavigateToOfficer);
+                }
+                break;
+            }
 
             case FarmState.CycleComplete:
                 var elapsed = DateTime.Now - StartTime;
@@ -198,7 +305,7 @@ public sealed class FarmController : IDisposable
         SendCallback("SelectString", true, 1);
         await Task.Delay(800);
         if (!await WaitForAddonAsync("GrandCompanySupplyList", 8000)) { CloseAddonSafe("SelectString"); SetError("Expert Delivery did not open"); return; }
-        _deliveryRow = 0; _deliverySkipped = 0; _sealsBefore = GetCurrentSeals();
+        _deliveryRow = 0; _deliverySkipped = 0; _deliveryListEmpty = false; _sealsBefore = GetCurrentSeals();
         Status("Expert Delivery open — processing items...");
         GotoState(FarmState.ProcessDelivery);
     }
@@ -222,7 +329,7 @@ public sealed class FarmController : IDisposable
         }
         else
         {
-            // No confirm = list empty
+            _deliveryListEmpty = true;
             CloseAddonSafe("GrandCompanySupplyList"); CloseAddonSafe("SelectString"); FinishDelivery();
         }
     }
@@ -231,8 +338,12 @@ public sealed class FarmController : IDisposable
     {
         var gained = GetCurrentSeals() - _sealsBefore;
         TotalSeals += Math.Max(0, gained);
-        Log($"Delivery done | +{gained} seals | Now: {GetCurrentSeals()}");
-        GotoState(FarmState.NavigateToShop);
+        Log($"Delivery done | +{gained} seals | Now: {GetCurrentSeals():N0} | list empty: {_deliveryListEmpty}");
+
+        if (CanAffordDuckbone())
+            GotoState(FarmState.NavigateToShop);
+        else
+            GotoState(FarmState.CheckGcLoop);
     }
 
     private async Task OpenGCShopAsync()
@@ -251,9 +362,9 @@ public sealed class FarmController : IDisposable
         var cur = GetCurrentSeals();
 
         if (cur - cfg.DuckboneSealCost < cfg.SealReserve)
-        { Log($"Seals low ({cur}) — done"); CloseAddonSafe("GCShop"); CloseAddonSafe("SelectString"); GotoState(FarmState.CycleComplete); return; }
+        { Log($"Seals low ({cur:N0}) — done buying"); CloseAddonSafe("GCShop"); CloseAddonSafe("SelectString"); GotoState(FarmState.CheckGcLoop); return; }
 
-        if (!IsAddonOpen("GCShop")) { GotoState(FarmState.CycleComplete); return; }
+        if (!IsAddonOpen("GCShop")) { GotoState(FarmState.CheckGcLoop); return; }
 
         SendCallback("GCShop", true, 0, cfg.DuckboneShopRow);
         await Task.Delay(600);
@@ -275,7 +386,7 @@ public sealed class FarmController : IDisposable
         else if (IsAddonOpen("GCShop"))
         {
             Log("WARN: No buy dialog — check Duckbone Shop Row in config");
-            CloseAddonSafe("GCShop"); GotoState(FarmState.CycleComplete);
+            CloseAddonSafe("GCShop"); GotoState(FarmState.CheckGcLoop);
         }
     }
 
@@ -288,6 +399,19 @@ public sealed class FarmController : IDisposable
     {
         var player = Service.ObjectTable.LocalPlayer;
         return player?.Position;
+    }
+
+    private static bool CanAffordDuckbone()
+    {
+        var cfg = Plugin.Config;
+        return GetCurrentSeals() >= cfg.DuckboneSealCost + cfg.SealReserve;
+    }
+
+    private static bool ShouldEnterGcSpendLoop()
+    {
+        var cfg = Plugin.Config;
+        var seals = GetCurrentSeals();
+        return CanAffordDuckbone() || seals > cfg.SealReserve;
     }
 
     private static int GetCurrentSeals()
