@@ -3,7 +3,7 @@
     "Author": "ofnature",
     "Name": "MistwakeFarm",
     "InternalName": "MistwakeFarm",
-    "AssemblyVersion": "1.0.0.0",
+    "AssemblyVersion": "1.0.0.2",
     "Description": "Automates Mistwake dungeon farming, GC expert delivery, and Duckbone purchasing.",
     "ApplicableVersion": "any",
     "RepoUrl": "https://github.com/ofnature/MistwakeFarm",
