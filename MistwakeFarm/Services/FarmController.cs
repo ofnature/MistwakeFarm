@@ -279,7 +279,13 @@ public sealed class FarmController : IDisposable
     private async Task NavigateAndInteractAsync(Vector3 dest, string npcName, FarmState nextState)
     {
         Status($"Navigating to {npcName}...");
-        await IpcManager.VnavMoveToAsync(dest, false);
+        Task<bool>? moveTask = null;
+        await Service.Framework.RunOnFrameworkThread(() =>
+        {
+            moveTask = IpcManager.VnavMoveToAsync(dest, false);
+        });
+        if (moveTask != null)
+            await moveTask;
 
         var deadline = DateTime.Now.AddSeconds(60);
         while (DateTime.Now < deadline)
@@ -287,14 +293,17 @@ public sealed class FarmController : IDisposable
             await Task.Delay(200);
             var pos = PlayerPos();
             if (pos.HasValue && Vector3.Distance(pos.Value, dest) <= 5f)
-            { IpcManager.VnavStop(); break; }
+            {
+                await Service.Framework.RunOnFrameworkThread(IpcManager.VnavStop);
+                break;
+            }
         }
-        IpcManager.VnavStop();
+        await Service.Framework.RunOnFrameworkThread(IpcManager.VnavStop);
         await Task.Delay(500);
 
-        var npc = FindNpcByName(npcName);
+        var npc = await Service.Framework.RunOnFrameworkThread(() => FindNpcByName(npcName));
         if (npc == null) { SetError($"Could not find NPC: {npcName}"); return; }
-        TargetAndInteract(npc);
+        await Service.Framework.RunOnFrameworkThread(() => TargetAndInteract(npc));
         await Task.Delay(1000);
         GotoState(nextState);
     }
@@ -302,9 +311,14 @@ public sealed class FarmController : IDisposable
     private async Task OpenExpertDeliveryAsync()
     {
         if (!await WaitForAddonAsync("SelectString", 8000)) { SetError("Officer menu did not open"); return; }
-        SendCallback("SelectString", true, 1);
+        await Service.Framework.RunOnFrameworkThread(() => SendCallback("SelectString", true, 1));
         await Task.Delay(800);
-        if (!await WaitForAddonAsync("GrandCompanySupplyList", 8000)) { CloseAddonSafe("SelectString"); SetError("Expert Delivery did not open"); return; }
+        if (!await WaitForAddonAsync("GrandCompanySupplyList", 8000))
+        {
+            await Service.Framework.RunOnFrameworkThread(() => CloseAddonSafe("SelectString"));
+            SetError("Expert Delivery did not open");
+            return;
+        }
         _deliveryRow = 0; _deliverySkipped = 0; _deliveryListEmpty = false; _sealsBefore = GetCurrentSeals();
         Status("Expert Delivery open — processing items...");
         GotoState(FarmState.ProcessDelivery);
@@ -313,16 +327,29 @@ public sealed class FarmController : IDisposable
     private async Task ProcessDeliveryRowAsync()
     {
         if (GetCurrentSeals() >= Plugin.Config.SealCap - 100)
-        { Log("Seal cap reached"); CloseAddonSafe("GrandCompanySupplyList"); CloseAddonSafe("SelectString"); FinishDelivery(); return; }
+        {
+            Log("Seal cap reached");
+            await Service.Framework.RunOnFrameworkThread(() =>
+            {
+                CloseAddonSafe("GrandCompanySupplyList");
+                CloseAddonSafe("SelectString");
+            });
+            FinishDelivery();
+            return;
+        }
 
-        if (!IsAddonOpen("GrandCompanySupplyList")) { FinishDelivery(); return; }
+        if (!await Service.Framework.RunOnFrameworkThread(() => IsAddonOpen("GrandCompanySupplyList")))
+        {
+            FinishDelivery();
+            return;
+        }
 
-        SendCallback("GrandCompanySupplyList", true, 0, _deliveryRow);
+        await Service.Framework.RunOnFrameworkThread(() => SendCallback("GrandCompanySupplyList", true, 0, _deliveryRow));
         await Task.Delay(600);
 
-        if (IsAddonOpen("SelectYesno"))
+        if (await Service.Framework.RunOnFrameworkThread(() => IsAddonOpen("SelectYesno")))
         {
-            SendCallback("SelectYesno", true, 0);
+            await Service.Framework.RunOnFrameworkThread(() => SendCallback("SelectYesno", true, 0));
             await Task.Delay(600);
             Log($"Delivered row {_deliveryRow} | Seals: {GetCurrentSeals()}");
             _deliveryRow = _deliverySkipped;
@@ -330,7 +357,12 @@ public sealed class FarmController : IDisposable
         else
         {
             _deliveryListEmpty = true;
-            CloseAddonSafe("GrandCompanySupplyList"); CloseAddonSafe("SelectString"); FinishDelivery();
+            await Service.Framework.RunOnFrameworkThread(() =>
+            {
+                CloseAddonSafe("GrandCompanySupplyList");
+                CloseAddonSafe("SelectString");
+            });
+            FinishDelivery();
         }
     }
 
@@ -348,9 +380,16 @@ public sealed class FarmController : IDisposable
 
     private async Task OpenGCShopAsync()
     {
-        if (await WaitForAddonAsync("SelectString", 8000)) { SendCallback("SelectString", true, 0); await Task.Delay(800); }
-        if (!await WaitForAddonAsync("GCShop", 8000)) { CloseAddonSafe("SelectString"); SetError("GCShop did not open"); return; }
-        SendCallback("GCShop", true, 0);
+        if (await WaitForAddonAsync("SelectString", 8000))
+            await Service.Framework.RunOnFrameworkThread(() => SendCallback("SelectString", true, 0));
+        await Task.Delay(800);
+        if (!await WaitForAddonAsync("GCShop", 8000))
+        {
+            await Service.Framework.RunOnFrameworkThread(() => CloseAddonSafe("SelectString"));
+            SetError("GCShop did not open");
+            return;
+        }
+        await Service.Framework.RunOnFrameworkThread(() => SendCallback("GCShop", true, 0));
         await Task.Delay(500);
         Status("GC Shop open — buying Duckbones...");
         GotoState(FarmState.BuyDuckbones);
@@ -362,31 +401,45 @@ public sealed class FarmController : IDisposable
         var cur = GetCurrentSeals();
 
         if (cur - cfg.DuckboneSealCost < cfg.SealReserve)
-        { Log($"Seals low ({cur:N0}) — done buying"); CloseAddonSafe("GCShop"); CloseAddonSafe("SelectString"); GotoState(FarmState.CheckGcLoop); return; }
+        {
+            Log($"Seals low ({cur:N0}) — done buying");
+            await Service.Framework.RunOnFrameworkThread(() =>
+            {
+                CloseAddonSafe("GCShop");
+                CloseAddonSafe("SelectString");
+            });
+            GotoState(FarmState.CheckGcLoop);
+            return;
+        }
 
-        if (!IsAddonOpen("GCShop")) { GotoState(FarmState.CheckGcLoop); return; }
+        if (!await Service.Framework.RunOnFrameworkThread(() => IsAddonOpen("GCShop")))
+        {
+            GotoState(FarmState.CheckGcLoop);
+            return;
+        }
 
-        SendCallback("GCShop", true, 0, cfg.DuckboneShopRow);
+        await Service.Framework.RunOnFrameworkThread(() => SendCallback("GCShop", true, 0, cfg.DuckboneShopRow));
         await Task.Delay(600);
 
-        if (IsAddonOpen("ShopExchangeDialog"))
+        if (await Service.Framework.RunOnFrameworkThread(() => IsAddonOpen("ShopExchangeDialog")))
         {
             var qty = Math.Clamp((cur - cfg.SealReserve) / cfg.DuckboneSealCost, 1, 99);
-            SendCallback("ShopExchangeDialog", true, 0, qty, 0);
+            await Service.Framework.RunOnFrameworkThread(() => SendCallback("ShopExchangeDialog", true, 0, qty, 0));
             await Task.Delay(600);
             TotalDuckbones += qty;
             Log($"Bought {qty} Duckbones | Seals: {GetCurrentSeals()}");
         }
-        else if (IsAddonOpen("SelectYesno"))
+        else if (await Service.Framework.RunOnFrameworkThread(() => IsAddonOpen("SelectYesno")))
         {
-            SendCallback("SelectYesno", true, 0);
+            await Service.Framework.RunOnFrameworkThread(() => SendCallback("SelectYesno", true, 0));
             await Task.Delay(600);
             TotalDuckbones++;
         }
-        else if (IsAddonOpen("GCShop"))
+        else if (await Service.Framework.RunOnFrameworkThread(() => IsAddonOpen("GCShop")))
         {
             Log("WARN: No buy dialog — check Duckbone Shop Row in config");
-            CloseAddonSafe("GCShop"); GotoState(FarmState.CheckGcLoop);
+            await Service.Framework.RunOnFrameworkThread(() => CloseAddonSafe("GCShop"));
+            GotoState(FarmState.CheckGcLoop);
         }
     }
 
@@ -436,7 +489,8 @@ public sealed class FarmController : IDisposable
         var deadline = DateTime.Now.AddMilliseconds(timeoutMs);
         while (DateTime.Now < deadline)
         {
-            if (IsAddonOpen(name)) return true;
+            if (await Service.Framework.RunOnFrameworkThread(() => IsAddonOpen(name)))
+                return true;
             await Task.Delay(100);
         }
         return false;

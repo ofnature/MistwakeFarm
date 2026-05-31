@@ -63,7 +63,7 @@ internal static class IpcManager
         {
             try
             {
-                _vnavPathfind  ??= Service.PluginInterface.GetIpcSubscriber<Vector3, bool, Task<bool>>("vnavmesh.Nav.PathfindAndMoveTo");
+                _vnavPathfind  ??= Service.PluginInterface.GetIpcSubscriber<Vector3, bool, Task<bool>>("vnavmesh.SimpleMove.PathfindAndMoveTo");
                 _vnavIsRunning ??= Service.PluginInterface.GetIpcSubscriber<bool>("vnavmesh.Nav.IsRunning");
                 _vnavIsReady   ??= Service.PluginInterface.GetIpcSubscriber<bool>("vnavmesh.Nav.IsReady");
                 _vnavStop      ??= Service.PluginInterface.GetIpcSubscriber<object?>("vnavmesh.Nav.Stop");
