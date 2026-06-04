@@ -4,7 +4,7 @@ Dalamud plugin (C# / .NET 10, `AllowUnsafeBlocks`, FFXIVClientStructs) that auto
 
 ## Project layout
 
-- `SealBreaker/Plugin.cs` — entry, `/mistwake`, config load
+- `SealBreaker/Plugin.cs` — entry, `/sealbreaker`, config load
 - `SealBreaker/Configuration.cs` — serialized settings (`IPluginConfiguration`)
 - `SealBreaker/Services/FarmController.cs` — **main state machine** (~4k lines); most farm logic lives here
 - `SealBreaker/Services/IpcManager.cs` — AutoDuty, ADS, vnavmesh, Lifestream IPC (check `*Available` before calls)

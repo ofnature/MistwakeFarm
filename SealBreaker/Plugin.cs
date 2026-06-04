@@ -11,7 +11,7 @@ namespace SealBreaker;
 
 public sealed class Plugin : IDalamudPlugin
 {
-    private const string CommandName = "/mistwake";
+    private const string CommandName = "/sealbreaker";
 
     public static Configuration  Config     { get; private set; } = null!;
     public static FarmController Controller { get; private set; } = null!;

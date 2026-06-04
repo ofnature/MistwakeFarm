@@ -52,7 +52,7 @@ If your XIVLauncher is installed elsewhere, update `DalamudLibPath` in the `.csp
 
 ## Usage
 
-- `/mistwake` — Open the plugin window
+- `/sealbreaker` — Open the plugin window
 - Configure settings in the UI (runs per cycle, GC, filter mode, item IDs)
 - Click **Start** — requires AutoDuty, vnavmesh, and Lifestream to be loaded
 - Click **Stop** at any time to halt cleanly

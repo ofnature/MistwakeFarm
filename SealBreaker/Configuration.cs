@@ -86,7 +86,7 @@ public class GcPortTicketShopSettings
 [Serializable]
 public class Configuration : IPluginConfiguration
 {
-    public int Version { get; set; } = 12;
+    public int Version { get; set; } = 14;
 
     // ── Duty ──────────────────────────────────────────────────
     public int RunsPerCycle { get; set; } = 5;
@@ -112,8 +112,8 @@ public class Configuration : IPluginConfiguration
             MenderY = 44.5f,
             MenderZ = 160f,
         },
-        new(),
-        new(),
+        new() { RepairEnabled = true },
+        new() { RepairEnabled = true },
     ];
 
     // Legacy v3 fields — migrated into GcTownNav[0] on load
@@ -138,6 +138,9 @@ public class Configuration : IPluginConfiguration
 
     /// <summary>Priority-ordered GC exchange purchases. Each entry buys until KeepAmount, then the next runs.</summary>
     public List<GcShopBuyEntry> GcShopBuyList { get; set; } = [];
+
+    /// <summary>Priority-ordered GC exchange purchases per Grand Company: 0=Limsa/Maelstrom, 1=Gridania/Twin Adder, 2=Ul'dah/Immortal Flames.</summary>
+    public List<GcShopBuyEntry>[] GcShopBuyLists { get; set; } = [[], [], []];
 
     /// <summary>Legacy v5 — migrated into GcTownNav[].PortTicket.</summary>
     public GcPortTicketShopSettings GcPortTicket { get; set; } = new();
@@ -170,15 +173,16 @@ public class Configuration : IPluginConfiguration
             GcTownNav =
             [
                 new() { RepairEnabled = true, MenderName = "Syvinmhas", MenderX = 10f, MenderY = 44.5f, MenderZ = 160f },
-                new(),
-                new(),
+                new() { RepairEnabled = true },
+                new() { RepairEnabled = true },
             ];
         }
 
-        if (Version >= 12)
-            return;
-
         EnsurePortTicketDefaults();
+        EnsureGcShopBuyLists();
+
+        if (Version >= 14)
+            return;
 
         if (Version < 4)
         {
@@ -263,15 +267,64 @@ public class Configuration : IPluginConfiguration
         if (Version < 12)
             EnsureAdsDutySupportDefaults();
 
-        Version = 12;
+        if (Version < 13)
+            MigrateLegacyGcShopBuyList();
+
+        EnsureAdditionalTownRepairDefaults();
+
+        Version = 14;
         Save();
+    }
+
+    public List<GcShopBuyEntry> GcShopBuyListFor(int gcIdx)
+    {
+        EnsureGcShopBuyLists();
+        return GcShopBuyLists[Math.Clamp(gcIdx, 0, GcShopBuyLists.Length - 1)];
     }
 
     public IReadOnlyList<GcShopBuyEntry> EnabledGcShopBuyList()
     {
-        EnsureGcTownNav();
+        var list = GcShopBuyListFor(GrandCompanyIndex);
+        return list.FindAll(e => e.Enabled && !string.IsNullOrWhiteSpace(e.ItemName));
+    }
+
+    private void EnsureGcShopBuyLists()
+    {
         GcShopBuyList ??= [];
-        return GcShopBuyList.FindAll(e => e.Enabled && !string.IsNullOrWhiteSpace(e.ItemName));
+
+        if (GcShopBuyLists == null || GcShopBuyLists.Length != 3)
+        {
+            var old = GcShopBuyLists;
+            GcShopBuyLists = [[], [], []];
+
+            if (old != null)
+            {
+                for (var i = 0; i < Math.Min(old.Length, GcShopBuyLists.Length); i++)
+                    GcShopBuyLists[i] = old[i] ?? [];
+            }
+        }
+
+        for (var i = 0; i < GcShopBuyLists.Length; i++)
+            GcShopBuyLists[i] ??= [];
+    }
+
+    private void MigrateLegacyGcShopBuyList()
+    {
+        if (GcShopBuyList.Count == 0)
+            return;
+
+        var activeList = GcShopBuyListFor(GrandCompanyIndex);
+        if (activeList.Count == 0)
+            activeList.AddRange(GcShopBuyList);
+    }
+
+    private void EnsureAdditionalTownRepairDefaults()
+    {
+        for (var i = 1; i < GcTownNav.Length; i++)
+        {
+            GcTownNav[i].RepairEnabled = true;
+            GcTownNav[i].RepairThresholdPercent = Math.Clamp(GcTownNav[i].RepairThresholdPercent, 10, 90);
+        }
     }
 
     private void EnsurePortTicketDefaults()

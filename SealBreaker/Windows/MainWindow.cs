@@ -17,6 +17,7 @@ public sealed class MainWindow : Window, IDisposable
     private static readonly Vector4 ColGray   = new(0.6f, 0.6f, 0.6f, 1f);
 
     private static readonly string[] GcTownTabNames = ["Limsa", "Gridania", "Ul'dah"];
+    private static readonly int[] GcTownTopLevelTabOrder = [0, 2, 1];
     private static readonly string[] GcTownFullNames =
     [
         "Maelstrom (zone 128)",
@@ -29,7 +30,25 @@ public sealed class MainWindow : Window, IDisposable
     private string _catalogSearch = string.Empty;
     private int _catalogAddIndex;
 
-    public MainWindow() : base($"Seal Breaker v{typeof(Plugin).Assembly.GetName().Version?.ToString(3) ?? "1.0.0"}##main")
+    private static string GetWindowTitle() =>
+        $"Seal Breaker v{GetDisplayVersion()}##SealBreaker";
+
+    private static string GetDisplayVersion()
+    {
+        var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+        var version = assembly
+            .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+            .OfType<System.Reflection.AssemblyInformationalVersionAttribute>()
+            .FirstOrDefault()
+            ?.InformationalVersion
+            .Split('+')[0];
+
+        return string.IsNullOrWhiteSpace(version)
+            ? assembly.GetName().Version?.ToString(3) ?? "1.0.0"
+            : version;
+    }
+
+    public MainWindow() : base(GetWindowTitle())
     {
         SizeConstraints = new WindowSizeConstraints
         {
@@ -42,6 +61,8 @@ public sealed class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
+        WindowName = GetWindowTitle();
+
         var cfg  = Plugin.Config;
         var ctrl = Plugin.Controller;
 
@@ -57,27 +78,27 @@ public sealed class MainWindow : Window, IDisposable
                 ImGui.EndTabItem();
             }
 
-            if (ImGui.BeginTabItem("Configuration"))
+            if (ImGui.BeginTabItem("Config"))
             {
                 DrawFarmTab(cfg);
                 ImGui.Separator();
                 DrawConfigTab(cfg);
-                ImGui.Separator();
-                DrawBuyListTab(cfg);
-                ImGui.Separator();
-                if (ImGui.BeginTabBar("##gcTownTabs"))
-                {
-                    for (var i = 0; i < GcTownTabNames.Length; i++)
-                    {
-                        if (ImGui.BeginTabItem(GcTownTabNames[i]))
-                        {
-                            DrawGcTownTab(cfg, i);
-                            ImGui.EndTabItem();
-                        }
-                    }
-                    ImGui.EndTabBar();
-                }
                 ImGui.EndTabItem();
+            }
+
+            if (ImGui.BeginTabItem("Buy List"))
+            {
+                DrawBuyListTab(cfg);
+                ImGui.EndTabItem();
+            }
+
+            foreach (var gcIdx in GcTownTopLevelTabOrder)
+            {
+                if (ImGui.BeginTabItem(GcTownTabNames[gcIdx]))
+                {
+                    DrawGcTownTab(cfg, gcIdx);
+                    ImGui.EndTabItem();
+                }
             }
 
             if (ImGui.BeginTabItem("Setup Guide"))
@@ -117,21 +138,37 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.TextWrapped("Priority order: buy each item until Keep is reached, then move to the next entry.");
         ImGui.TextDisabled("Keep 0 = spend seals on that item until reserve, then try the next entry.");
         ImGui.TextDisabled($"Seal reserve (Config tab): {cfg.SealReserve:N0} — buying stops when seals reach this amount.");
+        ImGui.TextDisabled($"Farm uses the {GcTownTabNames[cfg.GrandCompanyIndex]} buy list selected by Grand Company.");
 
         ImGui.Spacing();
-        DrawGcShopCatalogPicker(cfg);
-        ImGui.Spacing();
-        DrawGcShopBuyList(cfg);
+        if (ImGui.BeginTabBar("##gcShopBuyListTabs"))
+        {
+            for (var i = 0; i < GcTownTabNames.Length; i++)
+            {
+                if (ImGui.BeginTabItem(GcTownTabNames[i]))
+                {
+                    ImGui.PushID($"buylist-{i}");
+                    var buyList = cfg.GcShopBuyListFor(i);
+                    DrawGcShopCatalogPicker(cfg, i, buyList);
+                    ImGui.Spacing();
+                    DrawGcShopBuyList(cfg, i, buyList);
+                    ImGui.PopID();
+                    ImGui.EndTabItem();
+                }
+            }
+
+            ImGui.EndTabBar();
+        }
     }
 
-    private void DrawGcShopCatalogPicker(Configuration cfg)
+    private void DrawGcShopCatalogPicker(Configuration cfg, int gcIdx, List<GcShopBuyEntry> buyList)
     {
         GcShopCatalog.EnsureInitialized();
 
         ImGui.TextColored(ColGray, "GC exchange catalog");
         ImGui.TextDisabled("Loaded from gc_shop_catalog.json when present, otherwise built from game data (GCScripShop sheets).");
         ImGui.TextDisabled("If categories look wrong, click Reload from game data (old JSON exports are ignored).");
-        ImGui.TextWrapped("For GC aetheryte tickets: set your Grand Company on the Config tab, then use Add port ticket preset below.");
+        ImGui.TextWrapped("For GC aetheryte tickets: use Add port ticket preset on the matching city tab below.");
 
         if (ImGui.Button("Reload from game data"))
             GcShopCatalog.RefreshFromGameData();
@@ -158,7 +195,6 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.SetNextItemWidth(180);
         ImGui.InputTextWithHint("##catalogsearch", "Search items...", ref _catalogSearch, 64);
 
-        var gcIdx = cfg.GrandCompanyIndex;
         int? tabFilter = _catalogCategoryFilter == 0 ? null : _catalogCategoryFilter - 1;
         var filtered = GcShopCatalog.GetForGrandCompany(gcIdx, tabFilter, _catalogSearch).ToList();
 
@@ -176,8 +212,7 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.SameLine();
         if (ImGui.Button("Add selected"))
         {
-            cfg.GcShopBuyList ??= [];
-            cfg.GcShopBuyList.Add(GcShopCatalog.CreateBuyEntryFromCatalog(filtered[_catalogAddIndex]));
+            buyList.Add(GcShopCatalog.CreateBuyEntryFromCatalog(filtered[_catalogAddIndex]));
             cfg.Save();
         }
     }
@@ -669,42 +704,39 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.Columns(1);
     }
 
-    private static void DrawGcShopBuyList(Configuration cfg)
+    private static void DrawGcShopBuyList(Configuration cfg, int gcIdx, List<GcShopBuyEntry> buyList)
     {
-        cfg.EnsureGcTownNav();
-        cfg.GcShopBuyList ??= [];
-
         if (ImGui.Button("Add Duck Bones"))
         {
-            cfg.GcShopBuyList.Add(GcShopDefaults.CreateDuckboneBuyEntry(cfg.GrandCompanyIndex));
+            buyList.Add(GcShopDefaults.CreateDuckboneBuyEntry(gcIdx));
             cfg.Save();
         }
 
         ImGui.SameLine();
         if (ImGui.Button("Add blank entry"))
         {
-            cfg.GcShopBuyList.Add(new GcShopBuyEntry());
+            buyList.Add(new GcShopBuyEntry());
             cfg.Save();
         }
 
         ImGui.SameLine();
         if (ImGui.Button("Add port ticket preset"))
         {
-            cfg.GcShopBuyList.Add(GcShopDefaults.CreatePortTicketBuyEntry(cfg.GrandCompanyIndex));
+            buyList.Add(GcShopDefaults.CreatePortTicketBuyEntry(gcIdx));
             cfg.Save();
         }
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Uses the Grand Company selected on the Config tab.");
+            ImGui.SetTooltip($"Uses the {GcTownTabNames[gcIdx]} Grand Company catalog.");
 
-        if (cfg.GcShopBuyList.Count == 0)
+        if (buyList.Count == 0)
         {
             ImGui.Spacing();
             ImGui.TextColored(ColYellow, "No buy entries yet — add Duck Bones or a blank entry to get started.");
         }
 
-        for (var i = 0; i < cfg.GcShopBuyList.Count; i++)
+        for (var i = 0; i < buyList.Count; i++)
         {
-            var entry = cfg.GcShopBuyList[i];
+            var entry = buyList[i];
             ImGui.PushID(i);
             ImGui.Separator();
             ImGui.Text($"#{i + 1}");
@@ -716,27 +748,27 @@ public sealed class MainWindow : Window, IDisposable
             ImGui.SameLine();
             if (i > 0 && ImGui.SmallButton("Up"))
             {
-                (cfg.GcShopBuyList[i - 1], cfg.GcShopBuyList[i]) = (cfg.GcShopBuyList[i], cfg.GcShopBuyList[i - 1]);
+                (buyList[i - 1], buyList[i]) = (buyList[i], buyList[i - 1]);
                 cfg.Save();
             }
 
             ImGui.SameLine();
-            if (i < cfg.GcShopBuyList.Count - 1 && ImGui.SmallButton("Down"))
+            if (i < buyList.Count - 1 && ImGui.SmallButton("Down"))
             {
-                (cfg.GcShopBuyList[i + 1], cfg.GcShopBuyList[i]) = (cfg.GcShopBuyList[i], cfg.GcShopBuyList[i + 1]);
+                (buyList[i + 1], buyList[i]) = (buyList[i], buyList[i + 1]);
                 cfg.Save();
             }
 
             ImGui.SameLine();
             if (ImGui.SmallButton("Remove"))
             {
-                cfg.GcShopBuyList.RemoveAt(i);
+                buyList.RemoveAt(i);
                 cfg.Save();
                 ImGui.PopID();
                 break;
             }
 
-            DrawEntryCatalogPicker(cfg, entry, gcIdx: cfg.GrandCompanyIndex);
+            DrawEntryCatalogPicker(cfg, entry, gcIdx);
 
             var name = entry.ItemName;
             if (ImGui.InputText("Item name", ref name, 128))
