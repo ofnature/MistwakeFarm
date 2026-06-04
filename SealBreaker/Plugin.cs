@@ -1,4 +1,5 @@
 using Dalamud.Game.Command;
+using Dalamud.Interface.Textures;
 using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
@@ -6,6 +7,7 @@ using Dalamud.Interface.Windowing;
 using SealBreaker.Windows;
 using SealBreaker.Services;
 using System;
+using System.IO;
 
 namespace SealBreaker;
 
@@ -15,6 +17,8 @@ public sealed class Plugin : IDalamudPlugin
 
     public static Configuration  Config     { get; private set; } = null!;
     public static FarmController Controller { get; private set; } = null!;
+    public static ISharedImmediateTexture? PluginIcon { get; private set; }
+    public static ISharedImmediateTexture? PluginBanner { get; private set; }
 
     private readonly WindowSystem _windowSystem = new("SealBreaker");
     private readonly MainWindow   _mainWindow;
@@ -28,6 +32,10 @@ public sealed class Plugin : IDalamudPlugin
         Config = _pi.GetPluginConfig() as Configuration ?? new Configuration();
         Config.EnsureGcTownNav();
         Controller = new FarmController();
+
+        var dir = Service.PluginInterface.AssemblyLocation.DirectoryName!;
+        PluginIcon = LoadTexture(Path.Combine(dir, "icon.png"));
+        PluginBanner = LoadTexture(Path.Combine(dir, "banner.png"));
 
         GcShopCatalog.EnsureInitialized();
 
@@ -55,7 +63,12 @@ public sealed class Plugin : IDalamudPlugin
         _pi.UiBuilder.Draw         -= DrawUI;
         _pi.UiBuilder.OpenConfigUi -= DrawConfigUI;
         _pi.UiBuilder.OpenMainUi   -= DrawMainUI;
+        PluginIcon = null;
+        PluginBanner = null;
     }
+
+    private static ISharedImmediateTexture? LoadTexture(string path) =>
+        File.Exists(path) ? Service.TextureProvider.GetFromFile(path) : null;
 
     private void OnCommand(string command, string args) => _mainWindow.Toggle();
     private void DrawUI()       => _windowSystem.Draw();

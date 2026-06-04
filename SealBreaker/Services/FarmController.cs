@@ -191,6 +191,16 @@ public sealed class FarmController : IDisposable
     public int       TotalSeals     { get; private set; }
     public int       TotalDuckbones { get; private set; }
     public DateTime  StartTime      { get; private set; }
+    public TimeSpan AverageClearTime => _runClearTimes.Count == 0
+        ? TimeSpan.Zero
+        : TimeSpan.FromSeconds(_runClearTimes.Average(t => t.TotalSeconds));
+    public TimeSpan FastestClearTime => _runClearTimes.Count == 0
+        ? TimeSpan.Zero
+        : _runClearTimes.Min();
+    public TimeSpan SlowestClearTime => _runClearTimes.Count == 0
+        ? TimeSpan.Zero
+        : _runClearTimes.Max();
+    public int TotalRunsTracked => _runClearTimes.Count;
 
     private int   _runsThisCycle;
     private int   _pendingHandinRow = -1;
@@ -203,6 +213,8 @@ public sealed class FarmController : IDisposable
     private DateTime  _subZoneStartTime;
     private uint      _subZoneTargetZone;
     private DateTime  _dutyExitStartTime;
+    private DateTime  _currentRunStart;
+    private readonly List<TimeSpan> _runClearTimes = new();
     private DateTime? _dutyExitReadyAt;
     private bool      _gcInitialSpend;
     private bool      _deliveryListEmpty;
@@ -294,6 +306,8 @@ public sealed class FarmController : IDisposable
 
         IsRunning = true; TotalCycles = 0; TotalRuns = 0; TotalSeals = 0;
         TotalDuckbones = 0; StartTime = DateTime.Now; _runsThisCycle = 0; LastError = null;
+        _currentRunStart = default;
+        _runClearTimes.Clear();
         _gcInitialSpend = true; _deliveryListEmpty = false; _deliveryBlockedByCap = false;
         _deliveryFinishing = false; _expectNpcMenu = false;
         _automationOwnsGcPersonnelUi = false;
@@ -574,6 +588,7 @@ public sealed class FarmController : IDisposable
                         }
                     }
 
+                    _currentRunStart = DateTime.Now;
                     Status($"In duty — run {_runsThisCycle + 1}/{cfg.RunsPerCycle}");
                     GotoState(FarmState.WaitingForDutyComplete);
                 }
@@ -588,6 +603,14 @@ public sealed class FarmController : IDisposable
 
                 if (!InDuty() && dutyStopped)
                 {
+                    if (_currentRunStart != default)
+                    {
+                        var clearTime = DateTime.Now - _currentRunStart;
+                        _runClearTimes.Add(clearTime);
+                        _currentRunStart = default;
+                        Log($"Run cleared in {clearTime:mm\\:ss} | Avg: {AverageClearTime:mm\\:ss} | Fastest: {FastestClearTime:mm\\:ss}");
+                    }
+
                     _runsThisCycle++; TotalRuns++;
                     Status($"Run {_runsThisCycle}/{cfg.RunsPerCycle} complete (total {TotalRuns})");
                     if (_runsThisCycle >= cfg.RunsPerCycle)

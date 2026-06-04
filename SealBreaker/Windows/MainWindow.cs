@@ -1,6 +1,6 @@
 using Dalamud.Interface.Windowing;
 using Dalamud.Interface;
-using Dalamud.Interface.Textures;
+using Dalamud.Interface.ManagedFontAtlas;
 using SealBreaker.Services;
 using System;
 using System.Collections.Generic;
@@ -18,8 +18,8 @@ public sealed class MainWindow : Window, IDisposable
     private static readonly Vector4 ColYellow = new(0.9f, 0.9f, 0.2f, 1f);
     private static readonly Vector4 ColGray   = new(0.6f, 0.6f, 0.6f, 1f);
     private static readonly Vector4 ColTitle  = new(1.0f, 0.78f, 0.35f, 1f);
-    private static readonly Vector2 WindowIconSize = new(40f, 40f);
-    private const float HeaderTitleScale = 1.45f;
+    private static readonly Vector4 ColTitleGlow = new(0.0f, 0.95f, 0.95f, 0.35f);
+    private const string BannerTitleFontName = "CinzelDecorative-Bold.ttf";
 
     private static readonly string[] GcTownTabNames = ["Limsa", "Gridania", "Ul'dah"];
     private static readonly int[] GcTownTopLevelTabOrder = [0, 2, 1];
@@ -34,7 +34,7 @@ public sealed class MainWindow : Window, IDisposable
     private int _catalogCategoryFilter = 4;
     private string _catalogSearch = string.Empty;
     private int _catalogAddIndex;
-    private readonly ISharedImmediateTexture? _windowIcon;
+    private readonly IFontHandle? _bannerTitleFont;
 
     private static string GetWindowTitle() =>
         $"Seal Breaker v{GetDisplayVersion()}##SealBreaker";
@@ -56,7 +56,7 @@ public sealed class MainWindow : Window, IDisposable
 
     public MainWindow() : base(GetWindowTitle())
     {
-        _windowIcon = LoadWindowIcon();
+        _bannerTitleFont = CreateBannerTitleFont();
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -65,7 +65,7 @@ public sealed class MainWindow : Window, IDisposable
         };
     }
 
-    public void Dispose() { }
+    public void Dispose() => _bannerTitleFont?.Dispose();
 
     public override void Draw()
     {
@@ -74,7 +74,7 @@ public sealed class MainWindow : Window, IDisposable
         var cfg  = Plugin.Config;
         var ctrl = Plugin.Controller;
 
-        DrawWindowHeaderIcon();
+        DrawPluginBanner();
 
         if (ImGui.BeginTabBar("##sealbreakerTabs"))
         {
@@ -121,31 +121,82 @@ public sealed class MainWindow : Window, IDisposable
         }
     }
 
-    private static ISharedImmediateTexture? LoadWindowIcon()
+    private void DrawPluginBanner()
+    {
+        if (Plugin.PluginBanner == null || !Plugin.PluginBanner.TryGetWrap(out var banner, out _))
+            return;
+
+        var availWidth = ImGui.GetContentRegionAvail().X;
+        if (availWidth <= 0 || banner.Width <= 0)
+            return;
+
+        var bannerHeight = availWidth * (banner.Height / (float)banner.Width);
+        var bannerSize = new Vector2(availWidth, bannerHeight);
+        var bannerPos = ImGui.GetCursorScreenPos();
+
+        ImGui.Image(banner.Handle, bannerSize);
+
+        using var font = _bannerTitleFont?.Push();
+        DrawBannerTitleText(bannerPos, bannerSize);
+
+        ImGui.Spacing();
+    }
+
+    private static IFontHandle? CreateBannerTitleFont()
     {
         var pluginDirectory = Service.PluginInterface.AssemblyLocation.DirectoryName;
         if (string.IsNullOrWhiteSpace(pluginDirectory))
             return null;
 
-        var iconPath = Path.Combine(pluginDirectory, "icon.png");
-        return File.Exists(iconPath)
-            ? Service.TextureProvider.GetFromFile(iconPath)
-            : null;
+        var fontPath = Path.Combine(pluginDirectory, BannerTitleFontName);
+        if (!File.Exists(fontPath))
+            return null;
+
+        return Service.PluginInterface.UiBuilder.FontAtlas.NewDelegateFontHandle(e => e.OnPreBuild(tk =>
+        {
+            var config = new SafeFontConfig
+            {
+                SizePx = UiBuilder.DefaultFontSizePx * 2.15f,
+            };
+
+            tk.Font = tk.AddFontFromFile(fontPath, config);
+        }));
     }
 
-    private void DrawWindowHeaderIcon()
+    private static void DrawBannerTitleText(Vector2 bannerPos, Vector2 bannerSize)
     {
-        if (_windowIcon != null && _windowIcon.TryGetWrap(out var icon, out _))
+        const string text = "Seal Breaker";
+        var font = ImGui.GetFont();
+        var fontSize = ImGui.GetFontSize();
+        var textSize = ImGui.CalcTextSize(text);
+        var textPos = new Vector2(
+            bannerPos.X + (bannerSize.X - textSize.X) / 2f,
+            bannerPos.Y + (bannerSize.Y - textSize.Y) / 2f);
+
+        var drawList = ImGui.GetWindowDrawList();
+
+        for (var dx = -2; dx <= 2; dx += 2)
         {
-            ImGui.Image(icon.Handle, WindowIconSize);
-            ImGui.SameLine();
-            ImGui.SetCursorPosY(ImGui.GetCursorPosY() + 6f);
+            for (var dy = -2; dy <= 2; dy += 2)
+            {
+                if (dx == 0 && dy == 0)
+                    continue;
+
+                drawList.AddText(font, fontSize,
+                    new Vector2(textPos.X + dx, textPos.Y + dy),
+                    ImGui.ColorConvertFloat4ToU32(ColTitleGlow),
+                    text);
+            }
         }
 
-        ImGui.SetWindowFontScale(HeaderTitleScale);
-        ImGui.TextColored(ColTitle, "Seal Breaker");
-        ImGui.SetWindowFontScale(1f);
-        ImGui.Separator();
+        drawList.AddText(font, fontSize,
+            new Vector2(textPos.X + 3f, textPos.Y + 3f),
+            ImGui.ColorConvertFloat4ToU32(new Vector4(0f, 0f, 0f, 0.8f)),
+            text);
+        drawList.AddText(font, fontSize,
+            textPos,
+            ImGui.ColorConvertFloat4ToU32(ColTitle),
+            text);
     }
 
     private void DrawFarmTab(Configuration cfg)
@@ -738,6 +789,19 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.Text("Duck Bones Total:");  ImGui.NextColumn(); ImGui.Text($"{duckBonesTotal:N0}"); ImGui.NextColumn();
         ImGui.Text("Estimated Duck Bone Value:"); ImGui.NextColumn(); ImGui.Text($"{duckBonesValue:N0}"); ImGui.NextColumn();
         ImGui.Text("Runtime:");           ImGui.NextColumn(); ImGui.Text($"{elapsed:hh\\:mm\\:ss}");             ImGui.NextColumn();
+
+        if (ctrl.TotalRunsTracked > 0)
+        {
+            ImGui.Text("Avg clear time:"); ImGui.NextColumn();
+            ImGui.Text($"{ctrl.AverageClearTime:mm\\:ss}"); ImGui.NextColumn();
+
+            ImGui.Text("Fastest run:"); ImGui.NextColumn();
+            ImGui.Text($"{ctrl.FastestClearTime:mm\\:ss}"); ImGui.NextColumn();
+
+            ImGui.Text("Slowest run:"); ImGui.NextColumn();
+            ImGui.Text($"{ctrl.SlowestClearTime:mm\\:ss}"); ImGui.NextColumn();
+        }
+
         ImGui.Columns(1);
     }
 
