@@ -1,4 +1,4 @@
-# MistwakeFarm
+# SealBreaker
 
 Dalamud plugin that automates the Mistwake gil farming loop:
 
@@ -27,9 +27,9 @@ Dalamud plugin that automates the Mistwake gil farming loop:
 ### Build steps
 
 ```bash
-git clone https://github.com/ofnature/MistwakeFarm
-cd MistwakeFarm
-dotnet build MistwakeFarm/MistwakeFarm.csproj
+git clone https://github.com/ofnature/SealBreaker
+cd SealBreaker
+dotnet build SealBreaker/SealBreaker.csproj
 ```
 
 The `.csproj` references Dalamud DLLs from:
@@ -43,10 +43,10 @@ If your XIVLauncher is installed elsewhere, update `DalamudLibPath` in the `.csp
 1. Build in Debug configuration
 2. Copy the `bin/Debug/net9.0-windows/` output folder to:
    ```
-   %APPDATA%\XIVLauncher\devPlugins\MistwakeFarm\
+   %APPDATA%\XIVLauncher\devPlugins\SealBreaker\
    ```
 3. In-game: `/xlsettings` → Developer Mode on → `/xlplugins` → Dev Plugin Locations → add the folder
-4. Enable MistwakeFarm in the plugin list
+4. Enable SealBreaker in the plugin list
 
 ---
 
@@ -70,7 +70,7 @@ Open the GC Shop manually, count rows from 0 (top), and enter that number in the
 ## Project structure
 
 ```
-MistwakeFarm/
+SealBreaker/
 ├── Plugin.cs                  — Entry point, command registration
 ├── Configuration.cs           — Serialized settings
 ├── Services/

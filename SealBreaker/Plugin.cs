@@ -3,11 +3,11 @@ using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using Dalamud.Interface.Windowing;
-using MistwakeFarm.Windows;
-using MistwakeFarm.Services;
+using SealBreaker.Windows;
+using SealBreaker.Services;
 using System;
 
-namespace MistwakeFarm;
+namespace SealBreaker;
 
 public sealed class Plugin : IDalamudPlugin
 {
@@ -16,7 +16,7 @@ public sealed class Plugin : IDalamudPlugin
     public static Configuration  Config     { get; private set; } = null!;
     public static FarmController Controller { get; private set; } = null!;
 
-    private readonly WindowSystem _windowSystem = new("MistwakeFarm");
+    private readonly WindowSystem _windowSystem = new("SealBreaker");
     private readonly MainWindow   _mainWindow;
     private readonly IDalamudPluginInterface _pi;
 
@@ -25,22 +25,25 @@ public sealed class Plugin : IDalamudPlugin
         _pi = pluginInterface;
         _pi.Create<Service>();
 
-        Config     = _pi.GetPluginConfig() as Configuration ?? new Configuration();
+        Config = _pi.GetPluginConfig() as Configuration ?? new Configuration();
+        Config.EnsureGcTownNav();
         Controller = new FarmController();
+
+        GcShopCatalog.EnsureInitialized();
 
         _mainWindow = new MainWindow();
         _windowSystem.AddWindow(_mainWindow);
 
         Service.CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open Mistwake Farm window"
+            HelpMessage = "Open Seal Breaker window"
         });
 
         _pi.UiBuilder.Draw         += DrawUI;
         _pi.UiBuilder.OpenConfigUi += DrawConfigUI;
         _pi.UiBuilder.OpenMainUi   += DrawMainUI;
 
-        Service.PluginLog.Information("MistwakeFarm loaded.");
+        Service.PluginLog.Information("SealBreaker loaded.");
     }
 
     public void Dispose()

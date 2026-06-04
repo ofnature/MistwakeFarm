@@ -2,8 +2,8 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
-    <AssemblyName>MistwakeFarm</AssemblyName>
-    <RootNamespace>MistwakeFarm</RootNamespace>
+    <AssemblyName>SealBreaker</AssemblyName>
+    <RootNamespace>SealBreaker</RootNamespace>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -12,16 +12,22 @@
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
     <ImplicitUsings>enable</ImplicitUsings>
     <PlatformTarget>x64</PlatformTarget>
+    <!-- On each fix release: Version +0.0.1 (e.g. 1.0.3 -> 1.0.4), AssemblyVersion/FileVersion +0.0.0.1 (e.g. 1.0.0.3 -> 1.0.0.4). -->
+    <Version>1.0.66</Version>
+    <AssemblyVersion>1.0.0.66</AssemblyVersion>
+    <FileVersion>1.0.0.66</FileVersion>
   </PropertyGroup>
 
   <PropertyGroup>
-    <DalamudLibPath>$(AppData)\XIVLauncher\addon\Hooks\dev\</DalamudLibPath>
+    <DalamudHooksRoot>$(AppData)\XIVLauncher\addon\Hooks\</DalamudHooksRoot>
+    <!-- dev/ is legacy; current XIVLauncher uses versioned folders e.g. 15.0.2.0/. Override: -p:DalamudLibPath=... -->
+    <DalamudLibPath Condition="'$(DalamudLibPath)' != '' and !HasTrailingSlash('$(DalamudLibPath)')">$(DalamudLibPath)\</DalamudLibPath>
+    <DalamudLibPath Condition="'$(DalamudLibPath)' == '' and Exists('$(DalamudHooksRoot)dev\Dalamud.dll')">$(DalamudHooksRoot)dev\</DalamudLibPath>
+    <DalamudLibPath Condition="'$(DalamudLibPath)' == ''">$(DalamudHooksRoot)15.0.2.0\</DalamudLibPath>
   </PropertyGroup>
 
   <ItemGroup>
-    <None Update="MistwakeFarm.json">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
+    <None Include="SealBreaker.json" CopyToOutputDirectory="Always" />
   </ItemGroup>
 
   <ItemGroup>
