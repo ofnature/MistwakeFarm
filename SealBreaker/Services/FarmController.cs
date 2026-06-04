@@ -957,6 +957,13 @@ public sealed class FarmController : IDisposable
 
     private const float NpcInteractRange = 3.25f;
     private const float NpcApproachRange = 3.0f;
+    private static readonly Random _rng = new();
+
+    private static int Jitter(int baseMs, int rangeMs = 100)
+    {
+        lock (_rng)
+            return Math.Max(50, baseMs + _rng.Next(-rangeMs / 2, rangeMs / 2));
+    }
 
     private async Task NavigateToRepairAsync()
     {
@@ -1188,10 +1195,8 @@ public sealed class FarmController : IDisposable
 
         if (!IsRunning) return;
 
-        var expectsMenu = nextState is FarmState.OpenExpertDelivery or FarmState.OpenGCShop or FarmState.OpenRepairMenu;
-        const int maxAttempts = 5;
-
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        const int maxApproachAttempts = 5;
+        for (var attempt = 1; attempt <= maxApproachAttempts; attempt++)
         {
             if (!IsRunning) return;
 
@@ -1213,84 +1218,77 @@ public sealed class FarmController : IDisposable
             if (npcInfo.Item1 == null)
             {
                 await LogNearbyNamedObjectsAsync(npcName, dest);
-                var atDest = await Service.Framework.RunOnFrameworkThread(() =>
-                {
-                    var player = Service.ObjectTable.LocalPlayer;
-                    if (player == null)
-                        return false;
-
-                    var hint = GetMaelstromGcWalkwayHint(dest, npcName);
-                    return IsOnMaelstromGcWalkway(player.Position)
-                        ? RoutePointDistance(player.Position, hint) <= 8f
-                        : Vector3.Distance(player.Position, dest) <= 6f;
-                });
-                if (!atDest)
-                {
-                    await LogAsync($"{npcName} not found yet — attempt {attempt}/{maxAttempts}");
-                    await Task.Delay(400);
-                    continue;
-                }
-                await LogAsync($"At {npcName} coords — using /target fallback");
-            }
-            else if (npcInfo.Item2 > NpcInteractRange)
-            {
-                var npcPos = await Service.Framework.RunOnFrameworkThread(() => npcInfo.Item1!.Position);
-                await LogAsync($"Moving closer to {npcName} ({npcInfo.Item2:F1}y) attempt {attempt}/{maxAttempts}");
-                if (Plugin.Config.GrandCompanyIndex == 0
-                    && Service.ClientState.TerritoryType == MaelstromRepairZone
-                    && await Service.Framework.RunOnFrameworkThread(() =>
-                    {
-                        var player = Service.ObjectTable.LocalPlayer;
-                        return player != null && IsOnMaelstromGcWalkway(player.Position);
-                    }))
-                {
-                    var hint = GetMaelstromGcWalkwayHint(dest, npcName);
-                    var playerPos = await Service.Framework.RunOnFrameworkThread(() => Service.ObjectTable.LocalPlayer!.Position);
-                    var target = IsPlausibleMaelstromGcNpc(npcName, npcPos)
-                        ? AdaptGcTargetForWalkway(npcPos, playerPos)
-                        : hint;
-                    await WalkwayApproachNpcAsync(target, npcName, dest);
-                }
-                else
-                {
-                    await VnavApproachNpcAsync(npcPos, npcName, dest);
-                }
-                await WaitForMovementStopAsync();
-            }
-
-            IpcManager.VnavStop();
-            await WaitForMovementStopAsync(500);
-            if (expectsMenu)
-                await Service.Framework.RunOnFrameworkThread(() => _expectNpcMenu = true);
-            await Service.Framework.RunOnFrameworkThread(() => TargetAndInteract(npcName, dest));
-            await Task.Delay(600);
-
-            if (expectsMenu)
-            {
-                if (await WaitForNpcMenuAsync(nextState, 4000))
-                {
-                    await LogAsync($"Opened {npcName} menu on attempt {attempt}");
-                    await GotoStateAsync(nextState);
-                    return;
-                }
-
-                await LogAsync($"Menu not open after interact attempt {attempt}/{maxAttempts}");
+                await LogAsync($"{npcName} not found yet — approach attempt {attempt}/{maxApproachAttempts}");
+                await Task.Delay(Jitter(400));
                 continue;
             }
 
-            await GotoStateAsync(nextState);
-            return;
+            if (npcInfo.Item2 <= NpcInteractRange)
+                break;
+
+            var npcPos = await Service.Framework.RunOnFrameworkThread(() => npcInfo.Item1!.Position);
+            await LogAsync($"Moving closer to {npcName} ({npcInfo.Item2:F1}y) attempt {attempt}/{maxApproachAttempts}");
+            if (Plugin.Config.GrandCompanyIndex == 0
+                && Service.ClientState.TerritoryType == MaelstromRepairZone
+                && await Service.Framework.RunOnFrameworkThread(() =>
+                {
+                    var player = Service.ObjectTable.LocalPlayer;
+                    return player != null && IsOnMaelstromGcWalkway(player.Position);
+                }))
+            {
+                var hint = GetMaelstromGcWalkwayHint(dest, npcName);
+                var playerPos = await Service.Framework.RunOnFrameworkThread(() => Service.ObjectTable.LocalPlayer!.Position);
+                var target = IsPlausibleMaelstromGcNpc(npcName, npcPos)
+                    ? AdaptGcTargetForWalkway(npcPos, playerPos)
+                    : hint;
+                await WalkwayApproachNpcAsync(target, npcName, dest);
+            }
+            else
+            {
+                await VnavApproachNpcAsync(npcPos, npcName, dest);
+            }
+            await WaitForMovementStopAsync();
         }
 
         if (!IsRunning) return;
 
+        var expectsMenu = nextState is FarmState.OpenExpertDelivery or FarmState.OpenGCShop or FarmState.OpenRepairMenu;
+
+        await Service.Framework.RunOnFrameworkThread(IpcManager.VnavStop);
+        await Task.Delay(Jitter(300));
+
+        var npcToInteract = await Service.Framework.RunOnFrameworkThread(() =>
+            FindMaelstromGcNpc(npcName, dest) ?? FindNpcByName(npcName, dest));
+        if (npcToInteract == null)
+        {
+            await SetErrorAsync($"Could not find NPC: {npcName}");
+            return;
+        }
+
+        if (expectsMenu)
+            await Service.Framework.RunOnFrameworkThread(() => _expectNpcMenu = true);
+
+        await Service.Framework.RunOnFrameworkThread(() => SetTargetOnce(npcToInteract));
+        await Task.Delay(Jitter(200));
+
+        await Service.Framework.RunOnFrameworkThread(() => Interact(npcToInteract));
+        await Task.Delay(Jitter(400));
+
         if (expectsMenu)
         {
+            if (await WaitForNpcMenuAsync(nextState, 8000))
+            {
+                await LogAsync($"Opened {npcName} menu");
+                await GotoStateAsync(nextState);
+                return;
+            }
+
             _expectNpcMenu = false;
-            await SetErrorAsync($"Could not open menu for {npcName}");
+            await SetErrorAsync($"Menu did not open for {npcName}");
+            return;
         }
-        else
-            await SetErrorAsync($"Could not interact with {npcName}");
+
+        await GotoStateAsync(nextState);
     }
 
     private async Task WalkwayApproachNpcAsync(Vector3 dest, string npcName, Vector3 dataFallback)
@@ -5289,7 +5287,23 @@ public sealed class FarmController : IDisposable
             Log($"Targeted {npcName} via /target");
         }
 
-        Service.TargetManager.Target = obj;
+        TargetAndInteract(obj);
+    }
+
+    private static void TargetAndInteract(IGameObject obj)
+    {
+        SetTargetOnce(obj);
+        Interact(obj);
+    }
+
+    private static void SetTargetOnce(IGameObject obj)
+    {
+        if (Service.TargetManager.Target?.GameObjectId != obj.GameObjectId)
+            Service.TargetManager.Target = obj;
+    }
+
+    private static void Interact(IGameObject obj)
+    {
         unsafe
         {
             var go = (FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject*)obj.Address;
