@@ -82,6 +82,12 @@ internal static class IpcManager
 
         try
         {
+            if (!AutoDutyIsStopped())
+            {
+                Service.PluginLog.Information("[SealBreaker] AutoDuty.Run skipped because AutoDuty is not stopped");
+                return false;
+            }
+
             if (_autoDutyRun is { HasAction: true })
                 _autoDutyRun.InvokeAction(dungeonId, runs, false);
             else if (_autoDutyRunTwoArg is { HasAction: true })
@@ -110,7 +116,13 @@ internal static class IpcManager
         if (_autoDutyStop is not { HasAction: true })
             return;
 
-        try { _autoDutyStop.InvokeAction(); }
+        try
+        {
+            if (AutoDutyIsStopped())
+                return;
+
+            _autoDutyStop.InvokeAction();
+        }
         catch (IpcNotReadyError) { _autoDutyStop = null; }
         catch (Exception ex) { Service.PluginLog.Error(ex, "AutoDuty.Stop IPC failed"); }
     }
@@ -133,6 +145,7 @@ internal static class IpcManager
     private static ICallGateSubscriber<bool>? _adsStartDutyFromOutside;
     private static ICallGateSubscriber<bool>? _adsStartDutyFromInside;
     private static ICallGateSubscriber<bool>? _adsResumeDutyFromInside;
+    private static ICallGateSubscriber<bool>? _adsLeaveDuty;
     private static ICallGateSubscriber<string>? _adsGetStatusJson;
 
     public static bool AdsPluginLoaded => IsPluginLoaded(AdsPluginInternalName);
@@ -158,6 +171,8 @@ internal static class IpcManager
             _adsStartDutyFromInside = null;
         if (_adsResumeDutyFromInside is { HasFunction: false })
             _adsResumeDutyFromInside = null;
+        if (_adsLeaveDuty is { HasFunction: false })
+            _adsLeaveDuty = null;
         if (_adsGetStatusJson is { HasFunction: false })
             _adsGetStatusJson = null;
 
@@ -171,6 +186,7 @@ internal static class IpcManager
             _adsStartDutyFromOutside ??= Service.PluginInterface.GetIpcSubscriber<bool>("ADS.StartDutyFromOutside");
             _adsStartDutyFromInside  ??= Service.PluginInterface.GetIpcSubscriber<bool>("ADS.StartDutyFromInside");
             _adsResumeDutyFromInside ??= Service.PluginInterface.GetIpcSubscriber<bool>("ADS.ResumeDutyFromInside");
+            _adsLeaveDuty            ??= Service.PluginInterface.GetIpcSubscriber<bool>("ADS.LeaveDuty");
             _adsGetStatusJson        ??= Service.PluginInterface.GetIpcSubscriber<string>("ADS.GetStatusJson");
         }
         catch
@@ -225,22 +241,106 @@ internal static class IpcManager
         }
     }
 
+    public static bool AdsStartOutsideCommand()
+    {
+        if (!AdsPluginLoaded)
+            return false;
+
+        return Service.Framework.RunOnFrameworkThread(() => SendAdsChatCommand("/ads outside")).GetAwaiter().GetResult();
+    }
+
+    public static bool AdsStartInsideCommand()
+    {
+        if (!AdsPluginLoaded)
+            return false;
+
+        return Service.Framework.RunOnFrameworkThread(() => SendAdsChatCommand("/ads inside")).GetAwaiter().GetResult();
+    }
+
+    public static bool AdsLeaveDuty()
+    {
+        RefreshAdsSubscribers();
+        if (_adsLeaveDuty is { HasFunction: true })
+        {
+            try
+            {
+                if (_adsLeaveDuty.InvokeFunc())
+                    return true;
+            }
+            catch (IpcNotReadyError)
+            {
+                _adsLeaveDuty = null;
+            }
+            catch (Exception ex)
+            {
+                Service.PluginLog.Warning(ex, "ADS.LeaveDuty IPC failed; falling back to /ads leave");
+            }
+        }
+
+        return AdsPluginLoaded && Service.Framework.RunOnFrameworkThread(() => SendAdsChatCommand("/ads leave")).GetAwaiter().GetResult();
+    }
+
     /// <summary>ADS has no Stop IPC — use the /ads stop chat command.</summary>
     public static void AdsStop() =>
-        Service.Framework.RunOnFrameworkThread(SendAdsStopCommand).GetAwaiter().GetResult();
+        Service.Framework.RunOnFrameworkThread(() => SendAdsChatCommand("/ads stop")).GetAwaiter().GetResult();
 
-    private static unsafe void SendAdsStopCommand()
+    public static bool AdsStartRepair(string mode)
     {
+        if (!AdsPluginLoaded)
+            return false;
+
+        mode = string.IsNullOrWhiteSpace(mode) ? "npc-no-teleport-no-inn" : mode.Trim();
+        Service.Framework.RunOnFrameworkThread(() => SendAdsChatCommand($"/ads repair {mode}")).GetAwaiter().GetResult();
+        return true;
+    }
+
+    public static void RefreshAdsCombatAutomation()
+    {
+        SendChatCommand("/rotation Settings KeyBoardNoise false");
+        SendChatCommand("/rotation Settings BmrSafetyCheckAuto True");
+        SendChatCommand("/rotation Settings BmrSafetyCheckIntercept True");
+        SendChatCommand("/rotation Settings AutoOffBetweenArea False");
+        SendChatCommand("/rotation Settings AutoOffCutScene False");
+        SendChatCommand("/rotation Settings AutoOffSwitchClass False");
+        SendChatCommand("/rotation Settings AutoOffWhenDead False");
+        SendChatCommand("/rotation Settings AutoOffWhenDutyCompleted False");
+        SendChatCommand("/rotation Settings AutoOffAfterCombatTime 6942069");
+        SendChatCommand("/rotation Settings ToggleAuto False");
+        SendChatCommand("/rotation Settings ToggleManual False");
+        SendChatCommand("/rotation auto");
+        SendChatCommand("/fr off");
+
+        if (IsPluginLoaded("BossModReborn"))
+            SendChatCommand("/bmrai on");
+        else
+            SendChatCommand("/vbmai on");
+    }
+
+    private static bool SendAdsChatCommand(string command) => SendChatCommand(command);
+
+    private static unsafe bool SendChatCommand(string command)
+    {
+        try
+        {
+            Service.CommandManager.ProcessCommand(command);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Service.PluginLog.Debug(ex, $"CommandManager failed for {command}; falling back to chat box");
+        }
+
         var uiModule = UIModule.Instance();
         if (uiModule == null)
         {
-            Service.PluginLog.Error("[SealBreaker] UIModule unavailable — cannot send /ads stop");
-            return;
+            Service.PluginLog.Error($"[SealBreaker] UIModule unavailable — cannot send {command}");
+            return false;
         }
 
         var message = stackalloc Utf8String[1];
-        message->SetString("/ads stop");
+        message->SetString(command);
         uiModule->ProcessChatBoxEntry(message, nint.Zero, false);
+        return true;
     }
 
     /// <summary>True when ADS is not actively owning a duty run.</summary>
@@ -835,6 +935,7 @@ internal static class IpcManager
         _adsStartDutyFromOutside = null;
         _adsStartDutyFromInside  = null;
         _adsResumeDutyFromInside = null;
+        _adsLeaveDuty            = null;
         _adsGetStatusJson        = null;
     }
 

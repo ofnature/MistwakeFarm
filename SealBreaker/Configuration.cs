@@ -86,7 +86,15 @@ public class GcPortTicketShopSettings
 [Serializable]
 public class Configuration : IPluginConfiguration
 {
-    public int Version { get; set; } = 14;
+    public const int RepairProviderSealBreaker = 0;
+    public const int RepairProviderAds = 1;
+
+    public const int AdsRepairModeSelf = 0;
+    public const int AdsRepairModeNpc = 1;
+    public const int AdsRepairModeNpcNoInn = 2;
+    public const int AdsRepairModeNpcNoTeleportNoInn = 3;
+
+    public int Version { get; set; } = 15;
 
     // ── Duty ──────────────────────────────────────────────────
     public int RunsPerCycle { get; set; } = 5;
@@ -123,6 +131,10 @@ public class Configuration : IPluginConfiguration
     public List<NavWaypoint> MaelstromRepairNavWaypoints { get; set; } = [];
     public bool RepairEnabled { get; set; } = true;
     public int RepairThresholdPercent { get; set; } = 50;
+    /// <summary>0=SealBreaker mender route, 1=ADS repair command.</summary>
+    public int RepairProvider { get; set; } = RepairProviderSealBreaker;
+    /// <summary>0=self, 1=npc, 2=npc-no-inn, 3=npc-no-teleport-no-inn.</summary>
+    public int AdsRepairMode { get; set; } = AdsRepairModeNpcNoTeleportNoInn;
 
     public int SealCap           { get; set; } = 90000;
     public int SealReserve       { get; set; } = 1500;
@@ -162,6 +174,7 @@ public class Configuration : IPluginConfiguration
 
     // ── Misc ──────────────────────────────────────────────────
     public bool EchoToChat { get; set; } = false;
+    public bool ShowWindowBanner { get; set; } = false;
 
     public GcTownNavSettings TownNav(int gcIdx) =>
         GcTownNav[Math.Clamp(gcIdx, 0, GcTownNav.Length - 1)];
@@ -181,7 +194,7 @@ public class Configuration : IPluginConfiguration
         EnsurePortTicketDefaults();
         EnsureGcShopBuyLists();
 
-        if (Version >= 14)
+        if (Version >= 15)
             return;
 
         if (Version < 4)
@@ -271,8 +284,10 @@ public class Configuration : IPluginConfiguration
             MigrateLegacyGcShopBuyList();
 
         EnsureAdditionalTownRepairDefaults();
+        if (Version < 15)
+            MigrateGlobalRepairSettings();
 
-        Version = 14;
+        Version = 15;
         Save();
     }
 
@@ -326,6 +341,23 @@ public class Configuration : IPluginConfiguration
             GcTownNav[i].RepairThresholdPercent = Math.Clamp(GcTownNav[i].RepairThresholdPercent, 10, 90);
         }
     }
+
+    private void MigrateGlobalRepairSettings()
+    {
+        var active = TownNav(GrandCompanyIndex);
+        RepairEnabled = active.RepairEnabled;
+        RepairThresholdPercent = Math.Clamp(active.RepairThresholdPercent, 10, 90);
+        RepairProvider = Math.Clamp(RepairProvider, RepairProviderSealBreaker, RepairProviderAds);
+        AdsRepairMode = Math.Clamp(AdsRepairMode, AdsRepairModeSelf, AdsRepairModeNpcNoTeleportNoInn);
+    }
+
+    public string AdsRepairModeCommand() => AdsRepairMode switch
+    {
+        AdsRepairModeSelf => "self",
+        AdsRepairModeNpc => "npc",
+        AdsRepairModeNpcNoInn => "npc-no-inn",
+        _ => "npc-no-teleport-no-inn",
+    };
 
     private void EnsurePortTicketDefaults()
     {

@@ -245,6 +245,9 @@ public sealed class FarmController : IDisposable
     private bool _repairAllClicked;
     private bool _repairYesnoLogged;
     private DateTime? _repairPhaseSince;
+    private bool _adsRepairAttemptedBeforeDuty;
+    private bool _adsLeaveRequestedForFinalRun;
+    private DateTime _lastAdsCombatRefreshUtc;
     private bool _deliveryFinishing;
     private bool _expectNpcMenu;
     private bool _automationOwnsGcPersonnelUi;
@@ -266,6 +269,7 @@ public sealed class FarmController : IDisposable
     private DateTime? _dutySupportQueueSince;
     private DateTime _dutySupportLastActionUtc;
     private bool _adsNeedsStartInside;
+    private DateTime _autoDutyStoppedAt = DateTime.MinValue;
     private const int DutyExitTimeoutMs = 90_000;
     private string?   _lastStatusLogMessage;
     private DateTime  _lastStatusLogAt;
@@ -312,6 +316,10 @@ public sealed class FarmController : IDisposable
         _deliveryFinishing = false; _expectNpcMenu = false;
         _automationOwnsGcPersonnelUi = false;
         _repairTestMode = false; _deliveryTestMode = false; _shopTestMode = false; _extractTestMode = false;
+        _adsRepairAttemptedBeforeDuty = false;
+        _adsLeaveRequestedForFinalRun = false;
+        _lastAdsCombatRefreshUtc = DateTime.MinValue;
+        _autoDutyStoppedAt = DateTime.MinValue;
         _lastBetweenRunExtractRun = -1; _lastCycleBoundaryExtractCycle = -1;
         ResetMateriaExtractionState();
         ResetDutySupportQueueState();
@@ -485,6 +493,8 @@ public sealed class FarmController : IDisposable
         _automationOwnsGcPersonnelUi = false;
         ResetMateriaExtractionState();
         ResetDutySupportQueueState();
+        _adsLeaveRequestedForFinalRun = false;
+        _lastAdsCombatRefreshUtc = DateTime.MinValue;
         CloseMateriaExtractionUi();
         IpcManager.VnavStop();
         IpcManager.LifestreamAbort();
@@ -589,6 +599,9 @@ public sealed class FarmController : IDisposable
                     }
 
                     _currentRunStart = DateTime.Now;
+                    _adsRepairAttemptedBeforeDuty = false;
+                    _adsLeaveRequestedForFinalRun = false;
+                    RefreshAdsCombatAutomationIfNeeded(force: true);
                     Status($"In duty — run {_runsThisCycle + 1}/{cfg.RunsPerCycle}");
                     GotoState(FarmState.WaitingForDutyComplete);
                 }
@@ -600,6 +613,27 @@ public sealed class FarmController : IDisposable
                 var dutyStopped = runner == 0
                     ? IpcManager.AutoDutyIsStopped()
                     : IpcManager.AdsIsStopped();
+
+                if (runner == 0 && dutyStopped)
+                    RecordAutoDutyStopped();
+
+                if (runner == 1 && InDuty())
+                {
+                    RefreshAdsCombatAutomationIfNeeded();
+
+                    if (dutyStopped && _runsThisCycle + 1 >= cfg.RunsPerCycle)
+                    {
+                        if (!_adsLeaveRequestedForFinalRun)
+                        {
+                            _adsLeaveRequestedForFinalRun = IpcManager.AdsLeaveDuty();
+                            Log(_adsLeaveRequestedForFinalRun
+                                ? "ADS run complete — requested duty leave"
+                                : "WARN: ADS run complete but /ads leave could not be sent");
+                        }
+
+                        StatusQuiet("ADS run complete — waiting to leave duty...");
+                    }
+                }
 
                 if (!InDuty() && dutyStopped)
                 {
@@ -777,7 +811,7 @@ public sealed class FarmController : IDisposable
                     }
                     break;
                 }
-                if (!_repairTestMode && (!town.RepairEnabled || !town.HasMenderConfigured))
+                if (!_repairTestMode && (!Plugin.Config.RepairEnabled || !town.HasMenderConfigured))
                 {
                     Log("Repair skipped — not enabled or mender not configured");
                     GotoState(FarmState.StartDuty);
@@ -2958,12 +2992,16 @@ public sealed class FarmController : IDisposable
         if (runner == 0)
         {
             _adsNeedsStartInside = false;
+            if (!TryPrepareAutoDutyRun())
+                return false;
+
             if (!IpcManager.AutoDutyRun(MistwakeContentId, 1))
             {
                 await SetErrorAsync("AutoDuty.Run IPC failed");
                 return false;
             }
 
+            _autoDutyStoppedAt = DateTime.MinValue;
             return true;
         }
 
@@ -2978,6 +3016,7 @@ public sealed class FarmController : IDisposable
             return true;
         }
 
+        var adsOutsideQueued = TryStartAdsOutsideDuty();
         var duty = DutySupportCatalog.SelectedOrDefault(Plugin.Config);
         if (duty.ContentFinderConditionId == 0)
         {
@@ -2986,12 +3025,41 @@ public sealed class FarmController : IDisposable
         }
 
         _pendingDutySupportDuty = duty;
-        _adsNeedsStartInside = true;
+        _adsNeedsStartInside = !adsOutsideQueued;
         _dutySupportQueueSince = DateTime.UtcNow;
         _dutySupportLastActionUtc = DateTime.MinValue;
-        await LogAsync($"Queueing Duty Support: {duty.Name}");
+        await LogAsync(adsOutsideQueued
+            ? $"Queueing Duty Support: {duty.Name} (ADS outside ownership queued)"
+            : $"Queueing Duty Support: {duty.Name} (ADS will start inside after zoning)");
         await GotoStateAsync(FarmState.OpenDutySupport);
         return false;
+    }
+
+    private bool TryPrepareAutoDutyRun()
+    {
+        if (!IpcManager.AutoDutyIsStopped())
+        {
+            _autoDutyStoppedAt = DateTime.MinValue;
+            StatusQuiet("Waiting for AutoDuty to finish previous state...");
+            return false;
+        }
+
+        RecordAutoDutyStopped();
+
+        var cooldownRemaining = TimeSpan.FromSeconds(2) - (DateTime.Now - _autoDutyStoppedAt);
+        if (cooldownRemaining > TimeSpan.Zero)
+        {
+            StatusQuiet($"Waiting for AutoDuty cooldown ({cooldownRemaining.TotalSeconds:0.0}s)...");
+            return false;
+        }
+
+        return true;
+    }
+
+    private void RecordAutoDutyStopped()
+    {
+        if (_autoDutyStoppedAt == DateTime.MinValue)
+            _autoDutyStoppedAt = DateTime.Now;
     }
 
     private unsafe void OpenDutySupportTick()
@@ -3132,13 +3200,38 @@ public sealed class FarmController : IDisposable
 
     private bool TryStartAdsInsideDuty()
     {
-        var started = IpcManager.AdsStartDutyFromInside() || IpcManager.AdsResumeDutyFromInside();
+        var started = IpcManager.AdsStartDutyFromInside()
+                      || IpcManager.AdsResumeDutyFromInside()
+                      || IpcManager.AdsStartInsideCommand();
         if (!started)
             return false;
 
         _adsNeedsStartInside = false;
         ResetDutySupportQueueState(clearAdsStartPending: false);
+        RefreshAdsCombatAutomationIfNeeded(force: true);
         return true;
+    }
+
+    private bool TryStartAdsOutsideDuty()
+    {
+        var started = IpcManager.AdsStartDutyFromOutside() || IpcManager.AdsStartOutsideCommand();
+        if (started)
+            RefreshAdsCombatAutomationIfNeeded(force: true);
+
+        return started;
+    }
+
+    private void RefreshAdsCombatAutomationIfNeeded(bool force = false)
+    {
+        if (Plugin.Config.DutyRunner != 1)
+            return;
+
+        var now = DateTime.UtcNow;
+        if (!force && now - _lastAdsCombatRefreshUtc < TimeSpan.FromSeconds(15))
+            return;
+
+        _lastAdsCombatRefreshUtc = now;
+        IpcManager.RefreshAdsCombatAutomation();
     }
 
     private void ResetDutySupportQueueState(bool clearAdsStartPending = true)
@@ -3193,23 +3286,35 @@ public sealed class FarmController : IDisposable
 
     private void LogPreDutyGearCheck()
     {
-        var town = Plugin.Config.TownNav(Plugin.Config.GrandCompanyIndex);
+        var cfg = Plugin.Config;
+        var town = cfg.TownNav(cfg.GrandCompanyIndex);
         var condition = GetMinEquippedConditionPercent();
-        if (!town.RepairEnabled || !town.HasMenderConfigured)
+        if (!cfg.RepairEnabled)
         {
             Log($"Pre-duty gear check — lowest condition {condition}% (repair disabled)");
             return;
         }
 
-        Log($"Pre-duty gear check — lowest condition {condition}% (repair below {town.RepairThresholdPercent}%)");
+        var provider = cfg.RepairProvider == Configuration.RepairProviderAds ? "ADS" : "SealBreaker";
+        var menderNote = cfg.RepairProvider == Configuration.RepairProviderSealBreaker && !town.HasMenderConfigured
+            ? " — SealBreaker mender not configured"
+            : string.Empty;
+        Log($"Pre-duty gear check — lowest condition {condition}% (repair below {cfg.RepairThresholdPercent}%, provider {provider}){menderNote}");
     }
 
-    private static void StopDutyRunner()
+    private void StopDutyRunner()
     {
         if (Plugin.Config.DutyRunner == 0)
-            IpcManager.AutoDutyStop();
+        {
+            if (!IpcManager.AutoDutyIsStopped())
+                IpcManager.AutoDutyStop();
+            else
+                RecordAutoDutyStopped();
+        }
         else
+        {
             IpcManager.AdsStop();
+        }
     }
 
     private bool GcActionReady() => DateTime.UtcNow >= _gcActionCooldownUntil;
@@ -3654,10 +3759,24 @@ public sealed class FarmController : IDisposable
         if (!ShouldRepairBetweenRuns())
             return false;
 
+        var cfg = Plugin.Config;
+        var condition = GetMinEquippedConditionPercent();
+        if (cfg.RepairProvider == Configuration.RepairProviderAds)
+        {
+            if (_adsRepairAttemptedBeforeDuty)
+            {
+                Log($"ADS repair already attempted this duty launch — starting duty with gear at {condition}%");
+                return false;
+            }
+
+            _adsRepairAttemptedBeforeDuty = true;
+            _currentTask = RunAdsRepairBeforeDutyAsync(condition);
+            return true;
+        }
+
         var gcIdx = Plugin.Config.GrandCompanyIndex;
         var town = Plugin.Config.TownNav(gcIdx);
-        var condition = GetMinEquippedConditionPercent();
-        Log($"Gear condition {condition}% < {town.RepairThresholdPercent}% — heading to {town.MenderName} before duty");
+        Log($"Gear condition {condition}% < {cfg.RepairThresholdPercent}% — heading to {town.MenderName} before duty");
 
         if (Service.ClientState.TerritoryType == GcOfficerZoneId[gcIdx])
             GotoState(FarmState.NavigateToRepair);
@@ -3667,21 +3786,51 @@ public sealed class FarmController : IDisposable
         return true;
     }
 
+    private async Task RunAdsRepairBeforeDutyAsync(int condition)
+    {
+        var mode = Plugin.Config.AdsRepairModeCommand();
+        Log($"Gear condition {condition}% < {Plugin.Config.RepairThresholdPercent}% — starting ADS repair ({mode}) before duty");
+        if (!IpcManager.AdsStartRepair(mode))
+        {
+            await LogAsync("ADS repair skipped — ADS is not loaded");
+            await GotoStateAsync(FarmState.StartDuty);
+            return;
+        }
+
+        var deadline = DateTime.Now.AddMinutes(3);
+        while (IsRunning && DateTime.Now < deadline)
+        {
+            if (!NeedsRepair())
+            {
+                await LogAsync($"ADS repair complete | Lowest condition: {GetMinEquippedConditionPercent()}%");
+                await GotoStateAsync(FarmState.StartDuty);
+                return;
+            }
+
+            await Task.Delay(1000);
+        }
+
+        await LogAsync($"WARN: ADS repair did not finish before timeout | Lowest condition: {GetMinEquippedConditionPercent()}%");
+        await GotoStateAsync(FarmState.StartDuty);
+    }
+
     private static bool ShouldRepairBetweenRuns()
     {
         var cfg = Plugin.Config;
         var gcIdx = cfg.GrandCompanyIndex;
         var town = cfg.TownNav(gcIdx);
-        if (!town.RepairEnabled || !town.HasMenderConfigured)
+        if (!cfg.RepairEnabled)
             return false;
 
-        return GetMinEquippedConditionPercent() < town.RepairThresholdPercent;
+        if (cfg.RepairProvider == Configuration.RepairProviderSealBreaker && !town.HasMenderConfigured)
+            return false;
+
+        return GetMinEquippedConditionPercent() < cfg.RepairThresholdPercent;
     }
 
     private static bool NeedsRepair()
     {
-        var town = Plugin.Config.TownNav(Plugin.Config.GrandCompanyIndex);
-        return GetMinEquippedConditionPercent() < town.RepairThresholdPercent;
+        return GetMinEquippedConditionPercent() < Plugin.Config.RepairThresholdPercent;
     }
 
     private static unsafe int GetMinEquippedConditionPercent()

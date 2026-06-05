@@ -23,6 +23,14 @@ public sealed class MainWindow : Window, IDisposable
 
     private static readonly string[] GcTownTabNames = ["Limsa", "Gridania", "Ul'dah"];
     private static readonly int[] GcTownTopLevelTabOrder = [0, 2, 1];
+    private static readonly string[] RepairProviderItems = ["Seal Breaker", "ADS"];
+    private static readonly string[] AdsRepairModeItems =
+    [
+        "self",
+        "npc",
+        "npc-no-inn",
+        "npc-no-teleport-no-inn",
+    ];
     private static readonly string[] GcTownFullNames =
     [
         "Maelstrom (zone 128)",
@@ -74,7 +82,8 @@ public sealed class MainWindow : Window, IDisposable
         var cfg  = Plugin.Config;
         var ctrl = Plugin.Controller;
 
-        DrawPluginBanner();
+        if (cfg.ShowWindowBanner)
+            DrawPluginBanner();
 
         if (ImGui.BeginTabBar("##sealbreakerTabs"))
         {
@@ -323,8 +332,20 @@ public sealed class MainWindow : Window, IDisposable
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Select which plugin handles dungeon automation.");
 
+        var showWindowBanner = cfg.ShowWindowBanner;
+        if (ImGui.Checkbox("Show window banner", ref showWindowBanner))
+        {
+            cfg.ShowWindowBanner = showWindowBanner;
+            cfg.Save();
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Disable this if the banner image or custom title font causes display/rendering issues.");
+
         if (cfg.DutyRunner == 1 && ImGui.CollapsingHeader("ADS Duty Support", ImGuiTreeNodeFlags.DefaultOpen))
             DrawAdsDutySupportSection(cfg);
+
+        if (ImGui.CollapsingHeader("Repair", ImGuiTreeNodeFlags.DefaultOpen))
+            DrawRepairConfigSection(cfg);
 
         var gcItems = new[] { "Maelstrom (Limsa)", "Order of the Twin Adder (Gridania)", "Immortal Flames (Ul'dah)" };
         var gcIdx = cfg.GrandCompanyIndex;
@@ -350,6 +371,59 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.Spacing();
         if (ImGui.CollapsingHeader("Materia extraction"))
             DrawMateriaExtractionSection(cfg);
+    }
+
+    private static void DrawRepairConfigSection(Configuration cfg)
+    {
+        var repairEnabled = cfg.RepairEnabled;
+        if (ImGui.Checkbox("Repair between runs", ref repairEnabled))
+        {
+            cfg.RepairEnabled = repairEnabled;
+            cfg.Save();
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Checks gear before run 1 of each duty cycle. Mid-cycle runs do not repair.");
+
+        if (!cfg.RepairEnabled)
+            ImGui.BeginDisabled();
+
+        var repairPct = cfg.RepairThresholdPercent;
+        if (ImGui.SliderInt("Repair below %", ref repairPct, 10, 90))
+        {
+            cfg.RepairThresholdPercent = repairPct;
+            cfg.Save();
+        }
+
+        var repairProvider = Math.Clamp(cfg.RepairProvider, 0, RepairProviderItems.Length - 1);
+        if (ImGui.Combo("Repair option", ref repairProvider, RepairProviderItems, RepairProviderItems.Length))
+        {
+            cfg.RepairProvider = repairProvider;
+            cfg.Save();
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Seal Breaker uses the configured GC mender route. ADS sends an /ads repair command.");
+
+        if (cfg.RepairProvider == Configuration.RepairProviderAds)
+        {
+            var adsMode = Math.Clamp(cfg.AdsRepairMode, 0, AdsRepairModeItems.Length - 1);
+            if (ImGui.Combo("ADS repair mode", ref adsMode, AdsRepairModeItems, AdsRepairModeItems.Length))
+            {
+                cfg.AdsRepairMode = adsMode;
+                cfg.Save();
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("/ads repair self|npc|npc-no-inn|npc-no-teleport-no-inn");
+
+            if (!IpcManager.AdsPluginLoaded)
+                ImGui.TextColored(ColYellow, "ADS is not loaded; repair command will be skipped.");
+        }
+        else
+        {
+            ImGui.TextDisabled($"Configure mender and repair route on the {GcTownTabNames[cfg.GrandCompanyIndex]} tab.");
+        }
+
+        if (!cfg.RepairEnabled)
+            ImGui.EndDisabled();
     }
 
     private static void DrawAdsDutySupportSection(Configuration cfg)
@@ -478,44 +552,26 @@ public sealed class MainWindow : Window, IDisposable
         else
             ImGui.TextColored(ColGray, "  (configure now, switch GC on Config tab when ready)");
 
-        if (ImGui.CollapsingHeader("Repair between runs", ImGuiTreeNodeFlags.DefaultOpen))
+        if (ImGui.CollapsingHeader("Seal Breaker Repair", ImGuiTreeNodeFlags.DefaultOpen))
+        {
             DrawGcTownRepairSection(cfg, town, gcIdx);
+            ImGui.Separator();
+            DrawGcRouteSection(cfg, town, gcIdx, GcRouteKind.Repair);
+        }
 
         if (ImGui.CollapsingHeader("GC navigation route", ImGuiTreeNodeFlags.DefaultOpen))
             DrawGcRouteSection(cfg, town, gcIdx, GcRouteKind.Approach);
 
         if (ImGui.CollapsingHeader("GC corridor route"))
             DrawGcRouteSection(cfg, town, gcIdx, GcRouteKind.Corridor);
-
-        if (ImGui.CollapsingHeader("Repair navigation route", ImGuiTreeNodeFlags.DefaultOpen))
-            DrawGcRouteSection(cfg, town, gcIdx, GcRouteKind.Repair);
     }
 
     private enum GcRouteKind { Approach, Corridor, Repair }
 
     private static void DrawGcTownRepairSection(Configuration cfg, GcTownNavSettings town, int gcIdx)
     {
-        var repairEnabled = town.RepairEnabled;
-        if (ImGui.Checkbox("Repair between runs", ref repairEnabled))
-        {
-            town.RepairEnabled = repairEnabled;
-            cfg.Save();
-        }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip($"Visit the mender in {GcTownFullNames[gcIdx]} when gear drops below threshold.");
-
-        if (!town.RepairEnabled)
-            return;
-
-        var repairPct = town.RepairThresholdPercent;
-        if (ImGui.SliderInt("Repair below %", ref repairPct, 10, 90))
-        {
-            town.RepairThresholdPercent = repairPct;
-            cfg.Save();
-        }
-
-        ImGui.Spacing();
         ImGui.TextColored(ColYellow, "Mender NPC");
+        ImGui.TextDisabled("Used only when Config > Repair option is Seal Breaker.");
 
         var menderName = town.MenderName;
         if (ImGui.InputText("Mender name", ref menderName, 64))
