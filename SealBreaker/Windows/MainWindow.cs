@@ -557,6 +557,8 @@ public sealed class MainWindow : Window, IDisposable
             DrawGcTownRepairSection(cfg, town, gcIdx);
             ImGui.Separator();
             DrawGcRouteSection(cfg, town, gcIdx, GcRouteKind.Repair);
+            ImGui.Separator();
+            DrawGcRouteSection(cfg, town, gcIdx, GcRouteKind.RepairReturn);
         }
 
         if (ImGui.CollapsingHeader("GC navigation route", ImGuiTreeNodeFlags.DefaultOpen))
@@ -566,7 +568,7 @@ public sealed class MainWindow : Window, IDisposable
             DrawGcRouteSection(cfg, town, gcIdx, GcRouteKind.Corridor);
     }
 
-    private enum GcRouteKind { Approach, Corridor, Repair }
+    private enum GcRouteKind { Approach, Corridor, Repair, RepairReturn }
 
     private static void DrawGcTownRepairSection(Configuration cfg, GcTownNavSettings town, int gcIdx)
     {
@@ -616,11 +618,12 @@ public sealed class MainWindow : Window, IDisposable
 
     private static void DrawGcRouteSection(Configuration cfg, GcTownNavSettings town, int gcIdx, GcRouteKind kind)
     {
-        var (useCustom, bakedCount, tooltip, idPrefix, waypoints) = kind switch
+        var (useCustom, bakedCount, label, tooltip, idPrefix, waypoints) = kind switch
         {
             GcRouteKind.Approach => (
                 town.UseCustomGcNavWaypoints,
                 GcNavRoutes.BakedGcApproachCount(gcIdx),
+                gcIdx == 2 ? "Entry waypoints" : "Approach waypoints",
                 gcIdx == 0
                     ? "Y=40 supply deck walk (after port-in). Skipped on main deck."
                     : "Walk from city arrival to GC staging area.",
@@ -629,6 +632,7 @@ public sealed class MainWindow : Window, IDisposable
             GcRouteKind.Corridor => (
                 town.UseCustomGcCorridorWaypoints,
                 GcNavRoutes.BakedGcCorridorCount(gcIdx),
+                "Corridor waypoints",
                 gcIdx == 0
                     ? "Main deck Aftcastle → GC command corridor."
                     : "Optional second segment (stairs/hallway to officer area).",
@@ -637,15 +641,27 @@ public sealed class MainWindow : Window, IDisposable
             GcRouteKind.Repair => (
                 town.UseCustomRepairNavWaypoints,
                 GcNavRoutes.BakedRepairCount(gcIdx),
-                "GC area → mender forward, reversed back after repair.",
+                "Repair waypoints",
+                "GC area → mender forward.",
                 $"repair{gcIdx}",
                 town.RepairNavWaypoints),
+            GcRouteKind.RepairReturn => (
+                town.UseCustomRepairReturnNavWaypoints,
+                GcNavRoutes.BakedRepairReturnCount(gcIdx),
+                "Repair return waypoints",
+                "Mender area → GC interact point after repair.",
+                $"repairret{gcIdx}",
+                town.RepairReturnNavWaypoints),
             _ => throw new ArgumentOutOfRangeException(nameof(kind)),
         };
 
+        ImGui.TextColored(ColYellow, label);
         var useCustomLocal = useCustom;
-        if (ImGui.Checkbox("Use custom route (override baked-in)", ref useCustomLocal))
+        if (ImGui.Checkbox($"Use custom route (override baked-in)##{idPrefix}", ref useCustomLocal))
         {
+            if (useCustomLocal && !useCustom && waypoints.Count == 0)
+                waypoints.AddRange(GetRouteEditorDefaults(cfg, gcIdx, kind).Select(NavWaypoint.From));
+
             switch (kind)
             {
                 case GcRouteKind.Approach:
@@ -656,6 +672,9 @@ public sealed class MainWindow : Window, IDisposable
                     break;
                 case GcRouteKind.Repair:
                     town.UseCustomRepairNavWaypoints = useCustomLocal;
+                    break;
+                case GcRouteKind.RepairReturn:
+                    town.UseCustomRepairReturnNavWaypoints = useCustomLocal;
                     break;
             }
 
@@ -679,6 +698,15 @@ public sealed class MainWindow : Window, IDisposable
 
         DrawNavWaypointEditor(cfg, waypoints, idPrefix);
     }
+
+    private static Vector3[] GetRouteEditorDefaults(Configuration cfg, int gcIdx, GcRouteKind kind) => kind switch
+    {
+        GcRouteKind.Approach => GcNavRoutes.GetGcApproachPath(cfg, gcIdx),
+        GcRouteKind.Corridor => GcNavRoutes.GetGcCorridorPath(cfg, gcIdx),
+        GcRouteKind.Repair => GcNavRoutes.GetRepairPath(cfg, gcIdx),
+        GcRouteKind.RepairReturn => GcNavRoutes.GetRepairReturnPath(cfg, gcIdx),
+        _ => [],
+    };
 
     private static void DrawNavWaypointEditor(Configuration cfg, List<NavWaypoint> waypoints, string idPrefix)
     {

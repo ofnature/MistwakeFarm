@@ -53,6 +53,8 @@ public class GcTownNavSettings
     public List<NavWaypoint> GcCorridorWaypoints { get; set; } = [];
     public bool UseCustomRepairNavWaypoints { get; set; }
     public List<NavWaypoint> RepairNavWaypoints { get; set; } = [];
+    public bool UseCustomRepairReturnNavWaypoints { get; set; }
+    public List<NavWaypoint> RepairReturnNavWaypoints { get; set; } = [];
 
     /// <summary>GC aetheryte ticket exchange tuning (per town/GC) — not automated yet.</summary>
     public GcPortTicketShopSettings PortTicket { get; set; } = new();
@@ -94,7 +96,7 @@ public class Configuration : IPluginConfiguration
     public const int AdsRepairModeNpcNoInn = 2;
     public const int AdsRepairModeNpcNoTeleportNoInn = 3;
 
-    public int Version { get; set; } = 15;
+    public int Version { get; set; } = 16;
 
     // ── Duty ──────────────────────────────────────────────────
     public int RunsPerCycle { get; set; } = 5;
@@ -121,7 +123,14 @@ public class Configuration : IPluginConfiguration
             MenderZ = 160f,
         },
         new() { RepairEnabled = true },
-        new() { RepairEnabled = true },
+        new()
+        {
+            RepairEnabled = true,
+            MenderName = GcNavRoutes.UldahRepairName,
+            MenderX = GcNavRoutes.UldahRepairPos.X,
+            MenderY = GcNavRoutes.UldahRepairPos.Y,
+            MenderZ = GcNavRoutes.UldahRepairPos.Z,
+        },
     ];
 
     // Legacy v3 fields — migrated into GcTownNav[0] on load
@@ -186,7 +195,14 @@ public class Configuration : IPluginConfiguration
             GcTownNav =
             [
                 new() { RepairEnabled = true, MenderName = "Syvinmhas", MenderX = 10f, MenderY = 44.5f, MenderZ = 160f },
-                new() { RepairEnabled = true },
+                new()
+                {
+                    RepairEnabled = true,
+                    MenderName = GcNavRoutes.UldahRepairName,
+                    MenderX = GcNavRoutes.UldahRepairPos.X,
+                    MenderY = GcNavRoutes.UldahRepairPos.Y,
+                    MenderZ = GcNavRoutes.UldahRepairPos.Z,
+                },
                 new() { RepairEnabled = true },
             ];
         }
@@ -194,7 +210,7 @@ public class Configuration : IPluginConfiguration
         EnsurePortTicketDefaults();
         EnsureGcShopBuyLists();
 
-        if (Version >= 15)
+        if (Version >= 16)
             return;
 
         if (Version < 4)
@@ -287,7 +303,7 @@ public class Configuration : IPluginConfiguration
         if (Version < 15)
             MigrateGlobalRepairSettings();
 
-        Version = 15;
+        Version = 16;
         Save();
     }
 
@@ -339,6 +355,15 @@ public class Configuration : IPluginConfiguration
         {
             GcTownNav[i].RepairEnabled = true;
             GcTownNav[i].RepairThresholdPercent = Math.Clamp(GcTownNav[i].RepairThresholdPercent, 10, 90);
+        }
+
+        var uldah = GcTownNav[2];
+        if (string.IsNullOrWhiteSpace(uldah.MenderName))
+        {
+            uldah.MenderName = GcNavRoutes.UldahRepairName;
+            uldah.MenderX = GcNavRoutes.UldahRepairPos.X;
+            uldah.MenderY = GcNavRoutes.UldahRepairPos.Y;
+            uldah.MenderZ = GcNavRoutes.UldahRepairPos.Z;
         }
     }
 

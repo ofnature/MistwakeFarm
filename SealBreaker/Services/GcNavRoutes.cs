@@ -43,12 +43,28 @@ internal static class GcNavRoutes
     public static readonly Vector3 LimsaRepairStairLanding = new(1.4003145f, 44.499996f, 143.35721f);
     public static readonly Vector3 LimsaRepairApproach = new(10f, 44f, 158f);
     public static readonly Vector3 LimsaRepairMenderPos = new(10f, 44.5f, 160f);
+    public static readonly Vector3 UldahRepairPos = new(-155f, 12f, -24f);
+    public const string UldahRepairName = "Hehezofu";
+
+    private static readonly Vector3[] UldahEntryWaypoints =
+    [
+        new(-130f, -2f, -153f),
+        new(-94f, 4f, -114f),
+        new(-123f, 4f, -88f),
+        new(-141f, 4f, -106f),
+    ];
+
+    private static readonly Vector3[] UldahRepairToGcWaypoints =
+    [
+        new(-123f, 4f, -88f),
+        new(-141f, 4f, -106f),
+    ];
 
     private static readonly Vector3[][] BakedGcApproach =
     [
         LimsaUpperDeckFromLanding,
         [],
-        [],
+        UldahEntryWaypoints,
     ];
 
     private static readonly Vector3[][] BakedGcCorridor =
@@ -65,9 +81,24 @@ internal static class GcNavRoutes
         [],
     ];
 
+    private static readonly Vector3[][] BakedRepairReturn =
+    [
+        [],
+        [],
+        UldahRepairToGcWaypoints,
+    ];
+
     public static int BakedGcApproachCount(int gcIdx) => BakedGcApproach[gcIdx].Length;
     public static int BakedGcCorridorCount(int gcIdx) => BakedGcCorridor[gcIdx].Length;
     public static int BakedRepairCount(int gcIdx) => BakedRepair[gcIdx].Length;
+    public static int BakedRepairReturnCount(int gcIdx)
+    {
+        gcIdx = ClampGc(gcIdx);
+        if (BakedRepairReturn[gcIdx].Length > 0)
+            return BakedRepairReturn[gcIdx].Length;
+
+        return gcIdx == 0 ? BakedRepair[0].Length : 0;
+    }
 
     public static bool HasGcApproachRoute(Configuration cfg, int gcIdx) =>
         GetGcApproachPath(cfg, gcIdx).Length > 0;
@@ -77,6 +108,9 @@ internal static class GcNavRoutes
 
     public static bool HasRepairRoute(Configuration cfg, int gcIdx) =>
         GetRepairPath(cfg, gcIdx).Length > 0;
+
+    public static bool HasRepairReturnRoute(Configuration cfg, int gcIdx) =>
+        GetRepairReturnPath(cfg, gcIdx).Length > 0;
 
     public static Vector3[] GetGcApproachPath(Configuration cfg, int gcIdx)
     {
@@ -111,6 +145,13 @@ internal static class GcNavRoutes
     public static Vector3[] GetRepairReturnPath(Configuration cfg, int gcIdx)
     {
         gcIdx = ClampGc(gcIdx);
+        var town = cfg.TownNav(gcIdx);
+        if (town.UseCustomRepairReturnNavWaypoints && town.RepairReturnNavWaypoints.Count > 0)
+            return town.RepairReturnNavWaypoints.Select(w => w.ToVector3()).ToArray();
+
+        if (BakedRepairReturn[gcIdx].Length > 0)
+            return BakedRepairReturn[gcIdx];
+
         var forward = GetRepairPath(cfg, gcIdx);
         if (gcIdx == 0 && forward.Length < BakedRepair[0].Length)
             return OrderRoute(BakedRepair[0], reverse: true);

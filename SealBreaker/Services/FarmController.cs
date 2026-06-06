@@ -63,7 +63,7 @@ public sealed class FarmController : IDisposable
     [
         "Limsa Lominsa Lower Decks",
         "New Gridania",
-        "Ul'dah - Steps of Nald",
+        "Ul'dah - Steps of Thal",
     ];
     private static readonly string[] GcSubZoneTeleportCommand =
     [
@@ -108,7 +108,7 @@ public sealed class FarmController : IDisposable
     private const int GcLandingPathTimeoutMs = 180_000;
     private const int GcWaypointTimeoutMs = 45_000;
     private const int MappedStepTimeoutMs = 60_000;
-    private const float MappedStepArriveRange = 5f;
+    private const float MappedStepArriveRange = 3f;
     private const int MappedStepMsPerWaypoint = 30_000;
     private static readonly Vector3[] MaelstromAftcastleToGcWaypoints =
     [
@@ -136,7 +136,7 @@ public sealed class FarmController : IDisposable
     [
         new(95.68933f, 40.250282f, 74.54028f),
         new(-72.3f, -1.0f, -14.1f),
-        new(-148.9f, 4.1f, -107.0f),
+        new(-141f, 4f, -106f),
     ];
     /// <summary>Navmesh-safe staging on the Y≈40 walkway before walking to GC NPCs.</summary>
     private static readonly Vector3 MaelstromGcUpperHub = new(93.0f, 40.0f, 74.5f);
@@ -145,7 +145,7 @@ public sealed class FarmController : IDisposable
     [
         new(93.0f, 40.0f, 72.0f),
         new(-74.5f, -1.0f, -12.0f),
-        new(-145.7f, 4.1f, -107.0f),
+        new(-141f, 4f, -106f),
     ];
     private static readonly string[] GcOfficerName =
         ["Storm Personnel Officer", "Serpent Personnel Officer", "Flame Personnel Officer"];
@@ -1045,7 +1045,7 @@ public sealed class FarmController : IDisposable
                 }
 
                 await LogAsync($"Repair vnav → {point}...");
-                if (!await PathfindToPointAsync(point, 5f, GcWaypointTimeoutMs))
+                if (!await PathfindToPointAsync(point, MappedStepArriveRange, GcWaypointTimeoutMs))
                     await LogAsync($"WARN: repair vnav to {point} failed or timed out");
 
                 IpcManager.VnavStop();
@@ -1149,7 +1149,7 @@ public sealed class FarmController : IDisposable
                     return;
 
                 await LogAsync($"Return vnav → {point}...");
-                if (!await PathfindToPointAsync(point, 5f, GcWaypointTimeoutMs))
+                if (!await PathfindToPointAsync(point, MappedStepArriveRange, GcWaypointTimeoutMs))
                     await LogAsync($"WARN: return vnav to {point} failed or timed out");
 
                 IpcManager.VnavStop();
