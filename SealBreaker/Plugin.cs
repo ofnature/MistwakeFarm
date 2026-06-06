@@ -31,6 +31,7 @@ public sealed class Plugin : IDalamudPlugin
 
         Config = _pi.GetPluginConfig() as Configuration ?? new Configuration();
         Config.EnsureGcTownNav();
+        Config.ApplyAutomaticGrandCompanySettings();
         Controller = new FarmController();
 
         var dir = Service.PluginInterface.AssemblyLocation.DirectoryName!;

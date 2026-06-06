@@ -58,18 +58,18 @@ public sealed class FarmController : IDisposable
         [132, 133], // Twin Adder — New / Old Gridania
         [130, 131], // Immortal Flames — Steps of Nald / Thal
     ];
-    private static readonly uint[] GcOfficerZoneId = [128, 133, 131];
+    private static readonly uint[] GcOfficerZoneId = [128, 133, 130];
     private static readonly string[] GcCityTeleportCommand =
     [
         "Limsa Lominsa Lower Decks",
         "New Gridania",
-        "Ul'dah - Steps of Thal",
+        "Ul'dah - Steps of Nald",
     ];
     private static readonly string[] GcSubZoneTeleportCommand =
     [
         "The Aftcastle",
         "New Gridania",
-        "Steps of Thal",
+        "Ul'dah - Steps of Nald",
     ];
     /// <summary>Aftcastle crystal on the Y≈40 GC walkway (~-84, 40, -12).</summary>
     private static readonly Vector3 MaelstromAftcastleMainDeck = new(-84.0f, 40.0f, -12.0f);
@@ -323,6 +323,7 @@ public sealed class FarmController : IDisposable
         _lastBetweenRunExtractRun = -1; _lastCycleBoundaryExtractCycle = -1;
         ResetMateriaExtractionState();
         ResetDutySupportQueueState();
+        Plugin.Config.ApplyAutomaticGrandCompanySettings();
         GotoState(FarmState.CheckSealSpend);
         Log($"SealBreaker v{PluginVersion} started — current seals: {GetCurrentSeals():N0}");
     }
@@ -544,6 +545,7 @@ public sealed class FarmController : IDisposable
     private void Tick()
     {
         var cfg   = Plugin.Config;
+        cfg.ApplyAutomaticGrandCompanySettings();
         var gcIdx = cfg.GrandCompanyIndex;
 
         switch (State)
@@ -3408,6 +3410,13 @@ public sealed class FarmController : IDisposable
 
         if (repairOpen)
         {
+            if (!_repairAllClicked && !NeedsRepair())
+            {
+                Log($"No repair needed | Lowest condition: {GetMinEquippedConditionPercent()}%");
+                FinishRepair();
+                return;
+            }
+
             if (TryClickRepairAll())
             {
                 if (!_repairAllClicked)
@@ -4124,6 +4133,15 @@ public sealed class FarmController : IDisposable
         while (_buyListIndex < list.Count)
         {
             var entry = list[_buyListIndex];
+            if (!CanBuyShopEntryForCurrentRank(entry, out var rankSkipReason))
+            {
+                Log(rankSkipReason);
+                _buyListIndex++;
+                _gcShopCategorySelected = false;
+                _buyFindItemFailures = 0;
+                continue;
+            }
+
             if (NeedsMoreOfShopEntry(entry))
                 return entry;
 
@@ -4133,6 +4151,21 @@ public sealed class FarmController : IDisposable
         }
 
         return null;
+    }
+
+    private static unsafe bool CanBuyShopEntryForCurrentRank(GcShopBuyEntry entry, out string skipReason)
+    {
+        skipReason = string.Empty;
+        var itemId = ResolveShopItemId(entry);
+        if (!GcExchangeItemResolver.TryResolveAnyRank(entry.ItemName, itemId, entry.SealCost, out var info))
+            return true;
+
+        var playerRank = (int)PlayerState.Instance()->GetGrandCompanyRank();
+        if (playerRank >= info.RequiredGrandCompanyRank)
+            return true;
+
+        skipReason = $"Skipping '{entry.ItemName}' — requires GC rank {GrandCompanyState.RankName(info.RequiredGrandCompanyRank)}";
+        return false;
     }
 
     private void AdvanceShopBuyEntry()

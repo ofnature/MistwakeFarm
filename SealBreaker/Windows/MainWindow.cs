@@ -81,6 +81,7 @@ public sealed class MainWindow : Window, IDisposable
 
         var cfg  = Plugin.Config;
         var ctrl = Plugin.Controller;
+        cfg.ApplyAutomaticGrandCompanySettings();
 
         if (cfg.ShowWindowBanner)
             DrawPluginBanner();
@@ -347,20 +348,7 @@ public sealed class MainWindow : Window, IDisposable
         if (ImGui.CollapsingHeader("Repair", ImGuiTreeNodeFlags.DefaultOpen))
             DrawRepairConfigSection(cfg);
 
-        var gcItems = new[] { "Maelstrom (Limsa)", "Order of the Twin Adder (Gridania)", "Immortal Flames (Ul'dah)" };
-        var gcIdx = cfg.GrandCompanyIndex;
-        if (ImGui.Combo("Grand Company", ref gcIdx, gcItems, gcItems.Length))
-        { cfg.GrandCompanyIndex = gcIdx; cfg.Save(); }
-
-        var sealCap = cfg.SealCap;
-        if (ImGui.SliderInt("Seal cap", ref sealCap, 10000, 90000))
-        { cfg.SealCap = sealCap; cfg.Save(); }
-
-        var sealRes = cfg.SealReserve;
-        if (ImGui.SliderInt("Seal reserve", ref sealRes, 0, 10000))
-        { cfg.SealReserve = sealRes; cfg.Save(); }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Stop buying from the buy list when seals drop to this amount.");
+        DrawGrandCompanyOverrideSection(cfg);
 
         var autoDismiss = cfg.AutoDismissGcOfficerMenu;
         if (ImGui.Checkbox("Auto-close GC officer menus", ref autoDismiss))
@@ -371,6 +359,91 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.Spacing();
         if (ImGui.CollapsingHeader("Materia extraction"))
             DrawMateriaExtractionSection(cfg);
+    }
+
+    private static void DrawGrandCompanyOverrideSection(Configuration cfg)
+    {
+        if (GrandCompanyState.TryGetDetected(out var detectedGcIdx, out var detectedRank, out var detectedSealCap))
+        {
+            ImGui.TextDisabled($"Detected GC: {GrandCompanyState.GrandCompanyName(detectedGcIdx)}");
+            ImGui.TextDisabled($"Detected rank: {GrandCompanyState.RankName(detectedRank)} — seal cap {detectedSealCap:N0}");
+        }
+        else
+        {
+            ImGui.TextColored(ColYellow, "Could not detect current Grand Company/rank; using saved values.");
+        }
+
+        var open = ImGui.CollapsingHeader("Manual GC/seal override");
+        ImGui.SameLine();
+        DrawInfoMarker("Use at your own risk or for debugging only. When override is off, SealBreaker automatically uses your current Grand Company and rank-based seal cap.");
+        if (!open)
+            return;
+
+        ImGui.Indent();
+        var useOverride = cfg.UseGrandCompanyOverride;
+        if (ImGui.Checkbox("Use manual override", ref useOverride))
+        {
+            cfg.UseGrandCompanyOverride = useOverride;
+            if (!useOverride)
+                cfg.ApplyAutomaticGrandCompanySettings();
+            cfg.Save();
+        }
+
+        if (!cfg.UseGrandCompanyOverride)
+            ImGui.BeginDisabled();
+
+        var gcItems = new[] { "Maelstrom (Limsa)", "Order of the Twin Adder (Gridania)", "Immortal Flames (Ul'dah)" };
+        var gcIdx = cfg.GrandCompanyIndex;
+        if (ImGui.Combo("Grand Company", ref gcIdx, gcItems, gcItems.Length))
+        {
+            cfg.GrandCompanyIndex = gcIdx;
+            cfg.Save();
+        }
+
+        var sealCap = cfg.SealCap;
+        if (ImGui.SliderInt("Seal cap", ref sealCap, 10000, 90000))
+        {
+            cfg.SealCap = sealCap;
+            cfg.Save();
+        }
+
+        var sealRes = cfg.SealReserve;
+        if (ImGui.SliderInt("Seal reserve", ref sealRes, 0, 10000))
+        {
+            cfg.SealReserve = sealRes;
+            cfg.Save();
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Stop buying from the buy list when seals drop to this amount.");
+
+        if (!cfg.UseGrandCompanyOverride)
+            ImGui.EndDisabled();
+
+        ImGui.Unindent();
+    }
+
+    private static void DrawInfoMarker(string tooltip)
+    {
+        var size = ImGui.GetTextLineHeight();
+        var pos = ImGui.GetCursorScreenPos();
+        ImGui.InvisibleButton("##infoMarker", new Vector2(size, size));
+
+        var drawList = ImGui.GetWindowDrawList();
+        var center = new Vector2(pos.X + size * 0.5f, pos.Y + size * 0.5f);
+        drawList.AddCircleFilled(
+            center,
+            size * 0.42f,
+            ImGui.ColorConvertFloat4ToU32(new Vector4(0.45f, 0.45f, 0.45f, 1f)));
+
+        var text = "i";
+        var textSize = ImGui.CalcTextSize(text);
+        drawList.AddText(
+            new Vector2(center.X - textSize.X * 0.5f, center.Y - textSize.Y * 0.5f),
+            ImGui.ColorConvertFloat4ToU32(new Vector4(0.95f, 0.95f, 0.95f, 1f)),
+            text);
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(tooltip);
     }
 
     private static void DrawRepairConfigSection(Configuration cfg)

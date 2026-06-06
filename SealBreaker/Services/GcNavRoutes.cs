@@ -56,8 +56,15 @@ internal static class GcNavRoutes
 
     private static readonly Vector3[] UldahRepairToGcWaypoints =
     [
+        new(-147f, 12f, -24f),
         new(-123f, 4f, -88f),
         new(-141f, 4f, -106f),
+    ];
+
+    private static readonly Vector3[] UldahRepairToMenderWaypoints =
+    [
+        new(-123f, 4f, -88f),
+        UldahRepairPos,
     ];
 
     private static readonly Vector3[][] BakedGcApproach =
@@ -78,7 +85,7 @@ internal static class GcNavRoutes
     [
         LimsaRepairToMender,
         [],
-        [],
+        UldahRepairToMenderWaypoints,
     ];
 
     private static readonly Vector3[][] BakedRepairReturn =

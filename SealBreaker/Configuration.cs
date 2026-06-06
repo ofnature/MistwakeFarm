@@ -96,7 +96,7 @@ public class Configuration : IPluginConfiguration
     public const int AdsRepairModeNpcNoInn = 2;
     public const int AdsRepairModeNpcNoTeleportNoInn = 3;
 
-    public int Version { get; set; } = 16;
+    public int Version { get; set; } = 17;
 
     // ── Duty ──────────────────────────────────────────────────
     public int RunsPerCycle { get; set; } = 5;
@@ -147,6 +147,7 @@ public class Configuration : IPluginConfiguration
 
     public int SealCap           { get; set; } = 90000;
     public int SealReserve       { get; set; } = 1500;
+    public bool UseGrandCompanyOverride { get; set; } = false;
 
     // ── Item Filter ───────────────────────────────────────────
     /// <summary>0=Off  1=Blacklist  2=Whitelist</summary>
@@ -210,7 +211,7 @@ public class Configuration : IPluginConfiguration
         EnsurePortTicketDefaults();
         EnsureGcShopBuyLists();
 
-        if (Version >= 16)
+        if (Version >= 17)
             return;
 
         if (Version < 4)
@@ -303,8 +304,33 @@ public class Configuration : IPluginConfiguration
         if (Version < 15)
             MigrateGlobalRepairSettings();
 
-        Version = 16;
+        Version = 17;
         Save();
+    }
+
+    public void ApplyAutomaticGrandCompanySettings()
+    {
+        if (UseGrandCompanyOverride)
+            return;
+
+        if (!GrandCompanyState.TryGetDetected(out var detectedGcIdx, out _, out var detectedSealCap))
+            return;
+
+        var changed = false;
+        if (GrandCompanyIndex != detectedGcIdx)
+        {
+            GrandCompanyIndex = detectedGcIdx;
+            changed = true;
+        }
+
+        if (SealCap != detectedSealCap)
+        {
+            SealCap = detectedSealCap;
+            changed = true;
+        }
+
+        if (changed)
+            Save();
     }
 
     public List<GcShopBuyEntry> GcShopBuyListFor(int gcIdx)

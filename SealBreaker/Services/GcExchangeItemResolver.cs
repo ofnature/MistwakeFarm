@@ -13,6 +13,7 @@ internal readonly struct GcExchangeShopItemInfo
     public int CategoryCallback { get; init; }
     public int UiCategoryTab { get; init; }
     public uint CategoryRowId { get; init; }
+    public int RequiredGrandCompanyRank { get; init; }
     /// <summary>0-based row within the active category list (GCScripShopItem subrow order).</summary>
     public int SheetListRow { get; init; }
 }
@@ -21,6 +22,16 @@ internal readonly struct GcExchangeShopItemInfo
 internal static class GcExchangeItemResolver
 {
     public static bool TryResolve(string itemName, uint itemId, int sealCostHint, out GcExchangeShopItemInfo info)
+    {
+        return TryResolve(itemName, itemId, sealCostHint, filterByPlayerRank: true, out info);
+    }
+
+    public static bool TryResolveAnyRank(string itemName, uint itemId, int sealCostHint, out GcExchangeShopItemInfo info)
+    {
+        return TryResolve(itemName, itemId, sealCostHint, filterByPlayerRank: false, out info);
+    }
+
+    private static bool TryResolve(string itemName, uint itemId, int sealCostHint, bool filterByPlayerRank, out GcExchangeShopItemInfo info)
     {
         info = default;
         if (string.IsNullOrWhiteSpace(itemName) && itemId == 0)
@@ -54,7 +65,7 @@ internal static class GcExchangeItemResolver
                     {
                         if (shopItem.CostGCSeals <= 0)
                             continue;
-                        if (gcRank < shopItem.RequiredGrandCompanyRank.RowId)
+                        if (filterByPlayerRank && gcRank < shopItem.RequiredGrandCompanyRank.RowId)
                             continue;
 
                         var rowItemId = shopItem.Item.Value.RowId;
@@ -88,6 +99,7 @@ internal static class GcExchangeItemResolver
             var rankCallback = (int)bestCategory.Tier - 1;
             var sealCost = (int)bestShopItem.CostGCSeals;
             var resolvedItemId = bestShopItem.Item.Value.RowId;
+            var requiredRank = (int)bestShopItem.RequiredGrandCompanyRank.RowId;
             var sheetListRow = GcShopCatalog.ComputeCategoryListRowForPlayer(
                 bestCategory.RowId, resolvedItemId, sealCost);
             info = new GcExchangeShopItemInfo
@@ -98,6 +110,7 @@ internal static class GcExchangeItemResolver
                 CategoryCallback = categoryCallback,
                 UiCategoryTab = uiCategoryTab,
                 CategoryRowId = bestCategory.RowId,
+                RequiredGrandCompanyRank = requiredRank,
                 SheetListRow = sheetListRow,
             };
             return true;
